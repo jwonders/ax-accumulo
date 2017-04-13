@@ -1,6 +1,10 @@
 # ax-accumulo
 Asynchronous extensions to Accumulo
 
+## Disclaimer
+
+This project is not ready to be used yet.
+
 ## Usage
 
 The usage is a work in progress, but the general feel should stay the same.

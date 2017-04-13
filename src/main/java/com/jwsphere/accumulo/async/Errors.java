@@ -19,5 +19,5 @@ public class Errors {
             return failed;
         }
     }
-    
+
 }
