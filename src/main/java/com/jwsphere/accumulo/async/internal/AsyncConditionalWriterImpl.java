@@ -2,39 +2,27 @@ package com.jwsphere.accumulo.async.internal;
 
 import com.jwsphere.accumulo.async.AsyncConditionalWriter;
 import org.apache.accumulo.core.client.ConditionalWriter;
+import org.apache.accumulo.core.client.ConditionalWriter.Result;
 import org.apache.accumulo.core.data.ConditionalMutation;
 
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Supplier;
 
+import static java.util.concurrent.CompletableFuture.supplyAsync;
+
 public class AsyncConditionalWriterImpl implements AsyncConditionalWriter {
 
-    public static final int PERMITS = 10_000;
-
     private final ConditionalWriter writer;
-    private final Semaphore semaphore;
     private final CompletionTracker tracker;
     private final ExecutorService executor;
 
     /**
-     * Creates an async conditional writer.
-     *
-     * TODO - It is not obvious how or when to close the writer.
-     *   There is not an easy way for this object to know when to close the writer.
-     *   Nor is there a good way for the async connector to know when to close the
-     *   writer.  It may be possible to use the tracker from a background thread
-     *   to wait for tasks to complete upon a shutdown and subsequently close the
-     *   writer, but this seems overly complicated.  Another option would be to
-     *   allow the tracker to execute tasks upon completion in which case the thread
-     *   that the last task completes on would close the writer.  Another option is
-     *   to submit the task asynchronously on the ForkJoinPool.commonPool().
-     *
-     * @param writer
+     * Creates an async conditional writer.  Ownership of the supplied writer
+     * is transferred to this object.
      */
     public AsyncConditionalWriterImpl(ConditionalWriter writer) {
         this.writer = writer;
-        this.semaphore = new Semaphore(PERMITS);
         this.tracker = new CompletionTracker();
         this.executor = Executors.newCachedThreadPool();
         writer.close();
@@ -42,82 +30,60 @@ public class AsyncConditionalWriterImpl implements AsyncConditionalWriter {
 
     @Override
     public CompletionStage<ConditionalWriter.Result> submit(ConditionalMutation cm) throws InterruptedException {
-        ensureAlive();
-        semaphore.acquire();
-        CompletionStage<ConditionalWriter.Result> stage =
-                CompletableFuture.supplyAsync(() -> writeMutation(cm), executor);
+        return trySubmit(cm);
+    }
+
+    @Override
+    public CompletionStage<Result> submit(ConditionalMutation cm, long timeout, TimeUnit unit) throws InterruptedException {
+        return trySubmit(cm);
+    }
+
+    @Override
+    public CompletionStage<Result> trySubmit(ConditionalMutation cm) {
+        CompletionStage<ConditionalWriter.Result> stage = supplyAsync(() -> writer.write(cm), executor);
         tracker.submit(stage);
         return stage;
     }
 
     @Override
     public CompletionStage<Collection<ConditionalWriter.Result>> submitMany(Collection<ConditionalMutation> mutations) throws InterruptedException {
-        if (mutations.size() > PERMITS) {
-            throw new IllegalArgumentException("Insufficient permits to complete operation.");
-        }
-        ensureAlive();
-        semaphore.acquire(mutations.size());
+        return trySubmitMany(mutations);
+    }
+
+    @Override
+    public CompletionStage<Collection<Result>> submitMany(Collection<ConditionalMutation> mutations, long timeout, TimeUnit unit) throws InterruptedException {
+        return trySubmitMany(mutations);
+    }
+
+    @Override
+    public CompletionStage<Collection<Result>> trySubmitMany(Collection<ConditionalMutation> mutations) {
         CompletionStage<Collection<ConditionalWriter.Result>> stage =
-                CompletableFuture.supplyAsync(() -> writeMutations(mutations), executor);
+                supplyAsync(() -> writeMutations(mutations), executor);
         tracker.submit(stage);
         return stage;
     }
+
 
     @Override
     public void await() throws InterruptedException {
         tracker.await();
     }
 
-    private ConditionalWriter.Result writeMutation(ConditionalMutation cm) {
-        try {
-            return writer.write(cm);
-        } finally {
-            semaphore.release();
-        }
-    }
-
     private Collection<ConditionalWriter.Result> writeMutations(Collection<ConditionalMutation> mutations) {
-        try {
-            Iterator<ConditionalWriter.Result> resultIter = writer.write(mutations.iterator());
-            List<ConditionalWriter.Result> results = new ArrayList<>();
-            while (resultIter.hasNext()) {
-                results.add(resultIter.next());
-            }
-            return Collections.unmodifiableCollection(results);
-        } finally {
-            semaphore.release(mutations.size());
+        Iterator<ConditionalWriter.Result> resultIter = writer.write(mutations.iterator());
+        List<ConditionalWriter.Result> results = new ArrayList<>(mutations.size());
+        while (resultIter.hasNext()) {
+            results.add(resultIter.next());
         }
-    }
-
-    private void ensureAlive() {
-        if (executor.isShutdown()) {
-            throw new IllegalStateException("Cannot submit operations after shutdown.");
-        }
+        return Collections.unmodifiableCollection(results);
     }
 
     @Override
-    public void shutdown() {
-        executor.shutdown();
-    }
-
-    @Override
-    public void shutdownNow() {
+    public void close() {
+        // the caller is responsible for waiting for writes to complete
+        // in which case, shutdownNow will not encounter active or queued tasks.
         executor.shutdownNow();
-    }
-
-    @Override
-    public boolean isShutdown() {
-        return executor.isShutdown();
-    }
-
-    @Override
-    public boolean awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
-        return executor.awaitTermination(timeout, unit);
-    }
-
-    @Override
-    public boolean isTerminated() {
-        return executor.isTerminated();
+        writer.close();
     }
 
 }
