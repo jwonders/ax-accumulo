@@ -1,6 +1,7 @@
 package com.jwsphere.accumulo.async.internal;
 
 import com.jwsphere.accumulo.async.AsyncMultiTableBatchWriter;
+import com.jwsphere.accumulo.async.SubmissionTimeoutException;
 import org.apache.accumulo.core.client.AccumuloException;
 import org.apache.accumulo.core.client.AccumuloSecurityException;
 import org.apache.accumulo.core.client.MultiTableBatchWriter;
@@ -23,6 +24,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
 public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWriter {
+
+    private static final SubmissionTimeoutException SUBMISSION_TIMEOUT = new SubmissionTimeoutException();
 
     private final MultiTableBatchWriter writer;
 
@@ -47,8 +50,28 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
     }
 
     @Override
-    public CompletionStage<Void> submit(String table, Collection<Mutation> mutations) throws InterruptedException {
+    public CompletionStage<Void> submit(String table, Mutation mutation, long timeout, TimeUnit unit) throws InterruptedException {
+        return flushTask.submit(new FutureSingleMutation(table, mutation), timeout, unit);
+    }
+
+    @Override
+    public CompletionStage<Void> trySubmit(String table, Mutation mutation) {
+        return flushTask.trySubmit(new FutureSingleMutation(table, mutation));
+    }
+
+    @Override
+    public CompletionStage<Void> submitMany(String table, Collection<Mutation> mutations) throws InterruptedException {
         return flushTask.submit(new FutureMutationBatch(table, mutations));
+    }
+
+    @Override
+    public CompletionStage<Void> submitMany(String table, Collection<Mutation> mutations, long timeout, TimeUnit unit) throws InterruptedException {
+        return flushTask.submit(new FutureMutationBatch(table, mutations), timeout, unit);
+    }
+
+    @Override
+    public CompletionStage<Void> trySubmitMany(String table, Collection<Mutation> mutations) {
+        return flushTask.trySubmit(new FutureMutationBatch(table, mutations));
     }
 
     @Override
@@ -68,35 +91,16 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
     }
 
     @Override
-    public void shutdown() {
+    public void close() {
         // request that the flush task stops after any active flush completes
         flushTask.shutdown();
 
         // assuming the callers have stopped submitting tasks and there
         // is not an issue preventing the completion of tasks, interruption
-        // is not necessary to achieve an orderly shutdown
+        // is not necessary to achieve an orderly shutdown.
+        // interruption is honored as a fallback.
 
-        executorService.shutdown();
-    }
-
-    @Override
-    public void shutdownNow() {
         executorService.shutdownNow();
-    }
-
-    @Override
-    public boolean isShutdown() {
-        return executorService.isShutdown();
-    }
-
-    @Override
-    public void awaitTermination(long timeout, TimeUnit unit) throws InterruptedException {
-        executorService.awaitTermination(timeout, unit);
-    }
-
-    @Override
-    public boolean isTerminated() {
-        return executorService.isTerminated();
     }
 
     private static abstract class FutureMutation extends CompletableFuture<Void> {
@@ -172,17 +176,41 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
         }
 
         FutureMutation submit(FutureMutation mutation) throws InterruptedException {
+            ensureNotShutdown();
+            queue.put(mutation);
+            return mutation;
+        }
+
+        FutureMutation submit(FutureMutation mutation, long timeout, TimeUnit unit) throws InterruptedException {
+            ensureNotShutdown();
+            boolean added = queue.offer(mutation, timeout, unit);
+            if (!added) {
+                mutation.completeExceptionally(SUBMISSION_TIMEOUT);
+            }
+            return mutation;
+        }
+
+        FutureMutation trySubmit(FutureMutation mutation) {
+            ensureNotShutdown();
+            boolean added = queue.offer(mutation);
+            if (!added) {
+                mutation.completeExceptionally(SUBMISSION_TIMEOUT);
+            }
+            return mutation;
+        }
+
+        private void ensureNotShutdown() {
             if (shutdown) {
                 throw new IllegalStateException("Cannot submit mutations after a shutdown.");
             }
-            queue.put(mutation);
-            return mutation;
         }
 
         @Override
         public void run() {
             try {
                 while (!Thread.currentThread().isInterrupted() && !shutdown) {
+                    // TODO consider adding a short linger time in case there are a lot of mutations pending
+                    // submission and the queue capacity is to small to effectively saturate the writer's queue
                     try {
                         batch.add(queue.take());
                     } catch (InterruptedException e) {

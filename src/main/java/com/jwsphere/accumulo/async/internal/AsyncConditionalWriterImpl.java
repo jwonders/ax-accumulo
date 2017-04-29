@@ -25,7 +25,6 @@ public class AsyncConditionalWriterImpl implements AsyncConditionalWriter {
         this.writer = writer;
         this.tracker = new CompletionTracker();
         this.executor = Executors.newCachedThreadPool();
-        writer.close();
     }
 
     @Override

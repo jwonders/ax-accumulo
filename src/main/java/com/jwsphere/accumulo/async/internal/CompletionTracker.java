@@ -77,7 +77,7 @@ public class CompletionTracker {
         while (!complete) {
             complete = countNumIncomplete(numIncompleteByGeneration.subMap(0L, gen + 1)) == 0;
             if (!complete) {
-                this.await();
+                this.wait();
             }
         }
     }

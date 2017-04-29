@@ -21,6 +21,16 @@ public interface AsyncMultiTableBatchWriter {
     CompletionStage<Void> submit(String table, Mutation mutation) throws InterruptedException;
 
     /**
+     * Asynchronously inserts a mutation into the table.
+     */
+    CompletionStage<Void> submit(String table, Mutation mutation, long timeout, TimeUnit unit) throws InterruptedException;
+
+    /**
+     * Attempts to submit the mutation for insert into the table.
+     */
+    CompletionStage<Void> trySubmit(String table, Mutation mutation);
+
+    /**
      * Asynchronously inserts a collection of mutations into the table.
      *
      * This method will block if no space is available in the writer.
@@ -30,7 +40,47 @@ public interface AsyncMultiTableBatchWriter {
      * that dependent completion stages do not block indefinitely as might be
      * the case if chaining submissions.
      */
-    CompletionStage<Void> submit(String table, Collection<Mutation> mutations) throws InterruptedException;
+    CompletionStage<Void> submitMany(String table, Collection<Mutation> mutations) throws InterruptedException;
+
+    /**
+     *
+     */
+    CompletionStage<Void> submitMany(String table, Collection<Mutation> mutations, long timeout, TimeUnit unit) throws InterruptedException;
+
+    /**
+     *
+     */
+    CompletionStage<Void> trySubmitMany(String table, Collection<Mutation> mutations);
+
+    default AsyncBatchWriter getBatchWriter(String table) {
+        return new AsyncBatchWriter() {
+            @Override
+            public CompletionStage<Void> submit(Mutation mutation) throws InterruptedException {
+                return AsyncMultiTableBatchWriter.this.submit(table, mutation);
+            }
+
+            @Override
+            public CompletionStage<Void> submit(Collection<Mutation> mutations) throws InterruptedException {
+                return AsyncMultiTableBatchWriter.this.submitMany(table, mutations);
+            }
+
+            @Override
+            public void await() throws InterruptedException {
+                AsyncMultiTableBatchWriter.this.await();
+            }
+
+            @Override
+            public void await(long timeout, TimeUnit unit) throws InterruptedException {
+                AsyncMultiTableBatchWriter.this.await(timeout, unit);
+            }
+
+            @Override
+            public void close() {
+                throw new UnsupportedOperationException("Close the underlying AsyncMultiTableBatchWriter instead.");
+            }
+        };
+    }
+
 
     /**
      * Waits until previously submitted mutations have been written.
@@ -48,31 +98,11 @@ public interface AsyncMultiTableBatchWriter {
     void await(long timeout, TimeUnit unit) throws InterruptedException;
 
     /**
-     * Initiates an orderly shutdown where all mutations being actively written
-     * will be allowed to complete, but pending mutations will not be written.
+     * Immediately attempts to stop writing mutations and closes underlying
+     * resources.  Mutations that are actively being written may or may not
+     * complete.  If completion is required, call await after submission of
+     * mutations has stopped and prior to calling close.
      */
-    void shutdown();
-
-    /**
-     * Attempts to immediately stop writing mutations.  Mutations being actively
-     * written may or may not complete and pending mutations will not be written.
-     */
-    void shutdownNow();
-
-    /**
-     * Returns whether or not the writer has been shut down.
-     */
-    boolean isShutdown();
-
-    /**
-     * Waits for mutations to complete or until the timeout has elapsed.
-     */
-    void awaitTermination(long timeout, TimeUnit unit) throws InterruptedException;
-
-    /**
-     * Returns {@code true} if all mutations have completed (possibly exceptionally)
-     * following a shut down.
-     */
-    boolean isTerminated();
+    void close();
 
 }
