@@ -1,0 +1,67 @@
+package com.jwsphere.accumulo.async;
+
+import org.apache.accumulo.core.client.BatchWriterConfig;
+import org.apache.accumulo.core.client.Connector;
+import org.apache.accumulo.core.client.ZooKeeperInstance;
+import org.apache.accumulo.core.data.Mutation;
+import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+
+import java.util.concurrent.CompletableFuture;
+
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+@ExtendWith(AccumuloParameterResolver.class)
+public class AsyncMultiTableBatchWriterImplTest {
+
+    private static AccumuloProvider accumulo;
+    private static Connector connector;
+
+    @BeforeAll
+    public static void beforeAll(AccumuloProvider accumulo) throws Exception {
+        AsyncMultiTableBatchWriterImplTest.accumulo = accumulo;
+        ZooKeeperInstance instance = new ZooKeeperInstance(
+                accumulo.getAccumuloCluster().getInstanceName(),
+                accumulo.getAccumuloCluster().getZooKeepers()
+        );
+        connector = instance.getConnector(accumulo.getAdminUser(), accumulo.getAdminToken());
+        connector.tableOperations().create("table");
+    }
+
+    @AfterAll
+    public static void afterAll() throws Exception {
+        connector.tableOperations().delete("table");
+    }
+
+    @Test
+    public void testPutOne() throws Exception {
+        AsyncConnector asyncConnector = new AsyncConnector(connector);
+        BatchWriterConfig config = new BatchWriterConfig();
+        try (AsyncMultiTableBatchWriter bw = asyncConnector.createMultiTableBatchWriter(config)) {
+            Mutation m = new Mutation("put one");
+            m.put("cf", "cq", "value");
+            CompletableFuture<Void> op = bw.submit("table", m).toCompletableFuture();
+            op.get();
+            assertTrue(op.isDone());
+            assertFalse(op.isCompletedExceptionally());
+        }
+    }
+
+    @Test
+    public void testAwait() throws Exception {
+        AsyncConnector asyncConnector = new AsyncConnector(connector);
+        BatchWriterConfig config = new BatchWriterConfig();
+        try (AsyncMultiTableBatchWriter bw = asyncConnector.createMultiTableBatchWriter(config)) {
+            Mutation m = new Mutation("await");
+            m.put("cf", "cq", "value");
+            CompletableFuture<Void> op = bw.submit("table", m).toCompletableFuture();
+            bw.await();
+            assertTrue(op.isDone());
+            assertFalse(op.isCompletedExceptionally());
+        }
+    }
+
+}

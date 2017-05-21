@@ -1,5 +1,6 @@
 package com.jwsphere.accumulo.async.internal;
 
+import com.google.common.util.concurrent.RateLimiter;
 import com.jwsphere.accumulo.async.AsyncMultiTableBatchWriter;
 import com.jwsphere.accumulo.async.SubmissionTimeoutException;
 import org.apache.accumulo.core.client.AccumuloException;
@@ -40,7 +41,7 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
      */
     public AsyncMultiTableBatchWriterImpl(MultiTableBatchWriter writer) {
         this.writer = writer;
-        this.flushTask = new FlushTask(8 * 1024);
+        this.flushTask = new FlushTask(8 * 1024, 50);
         this.executorService.submit(flushTask);
     }
 
@@ -164,15 +165,17 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
         private final BlockingQueue<FutureMutation> queue;
         private final List<FutureMutation> batch;
+        private final RateLimiter limiter;
         private final int capacity;
 
         private volatile boolean shutdown = false;
 
-        FlushTask(int capacity) {
+        FlushTask(int capacity, int flushesPerSecondLimit) {
             // ideally capacity would be based on memory
             this.capacity = capacity;
             this.queue = new ArrayBlockingQueue<>(capacity);
             this.batch = new ArrayList<>(capacity);
+            this.limiter = RateLimiter.create(flushesPerSecondLimit);
         }
 
         FutureMutation submit(FutureMutation mutation) throws InterruptedException {
@@ -221,6 +224,7 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
                         for (FutureMutation mutation : batch) {
                             mutation.submit(writer);
                         }
+                        limiter.acquire();
                         writer.flush();
                         completeAll(batch);
                     } catch (MutationsRejectedException e) {
