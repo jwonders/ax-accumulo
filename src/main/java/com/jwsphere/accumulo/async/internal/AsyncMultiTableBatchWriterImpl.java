@@ -212,8 +212,6 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
         public void run() {
             try {
                 while (!Thread.currentThread().isInterrupted() && !shutdown) {
-                    // TODO consider adding a short linger time in case there are a lot of mutations pending
-                    // submission and the queue capacity is to small to effectively saturate the writer's queue
                     try {
                         batch.add(queue.take());
                     } catch (InterruptedException e) {
