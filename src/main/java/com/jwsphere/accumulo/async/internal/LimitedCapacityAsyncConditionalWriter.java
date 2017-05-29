@@ -19,7 +19,9 @@ public class LimitedCapacityAsyncConditionalWriter extends ForwardingAsyncCondit
 
     @Override
     public CompletionStage<Result> submit(ConditionalMutation cm) throws InterruptedException {
-        long requiredPermits = cm.estimatedMemoryUsed();
+        // TODO long semaphore
+        int requiredPermits = (int) cm.estimatedMemoryUsed();
+        semaphore.acquire(requiredPermits);
         return super.submit(cm);
     }
 

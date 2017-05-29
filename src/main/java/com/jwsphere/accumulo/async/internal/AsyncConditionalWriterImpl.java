@@ -5,16 +5,22 @@ import org.apache.accumulo.core.client.ConditionalWriter;
 import org.apache.accumulo.core.client.ConditionalWriter.Result;
 import org.apache.accumulo.core.data.ConditionalMutation;
 
-import java.util.*;
-import java.util.concurrent.*;
-import java.util.function.Supplier;
+import java.util.ArrayList;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.Iterator;
+import java.util.List;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 
 import static java.util.concurrent.CompletableFuture.supplyAsync;
 
 public class AsyncConditionalWriterImpl implements AsyncConditionalWriter {
 
     private final ConditionalWriter writer;
-    private final CompletionTracker tracker;
+    private final CompletionBarrier barrier;
     private final ExecutorService executor;
 
     /**
@@ -23,7 +29,7 @@ public class AsyncConditionalWriterImpl implements AsyncConditionalWriter {
      */
     public AsyncConditionalWriterImpl(ConditionalWriter writer) {
         this.writer = writer;
-        this.tracker = new CompletionTracker();
+        this.barrier = new CompletionBarrier();
         this.executor = Executors.newCachedThreadPool();
     }
 
@@ -40,7 +46,7 @@ public class AsyncConditionalWriterImpl implements AsyncConditionalWriter {
     @Override
     public CompletionStage<Result> trySubmit(ConditionalMutation cm) {
         CompletionStage<ConditionalWriter.Result> stage = supplyAsync(() -> writer.write(cm), executor);
-        tracker.submit(stage);
+        barrier.submit(stage);
         return stage;
     }
 
@@ -58,14 +64,14 @@ public class AsyncConditionalWriterImpl implements AsyncConditionalWriter {
     public CompletionStage<Collection<Result>> trySubmitMany(Collection<ConditionalMutation> mutations) {
         CompletionStage<Collection<ConditionalWriter.Result>> stage =
                 supplyAsync(() -> writeMutations(mutations), executor);
-        tracker.submit(stage);
+        barrier.submit(stage);
         return stage;
     }
 
 
     @Override
     public void await() throws InterruptedException {
-        tracker.await();
+        barrier.await();
     }
 
     private Collection<ConditionalWriter.Result> writeMutations(Collection<ConditionalMutation> mutations) {
