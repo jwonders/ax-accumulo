@@ -81,7 +81,6 @@ public interface AsyncConditionalWriter extends AutoCloseable {
      */
     CompletionStage<Collection<Result>> trySubmitMany(Collection<ConditionalMutation> mutations);
 
-
     /**
      * Waits until previously submitted mutations have completed.  A mutation is
      * considered to be submitted if there is a happens-before relationship
@@ -93,6 +92,16 @@ public interface AsyncConditionalWriter extends AutoCloseable {
      * @throws InterruptedException If this thread is interrupted while waiting.
      */
     void await() throws InterruptedException;
+
+    /**
+     * Waits until previously submitted mutations have completed or the timeout
+     * has elapsed, whichever happens first.  A mutation is considered to be
+     * submitted if there is a happens-before relationship between the return of
+     * the corresponding call to submit and the call to await.
+     *
+     * @throws InterruptedException If this thread is interrupted while waiting.
+     */
+    void await(long timeout, TimeUnit unit) throws InterruptedException;
 
     /**
      * Immediately attempts to stop writing mutations and closes underlying

@@ -1,5 +1,8 @@
 package com.jwsphere.accumulo.async;
 
+import com.jwsphere.accumulo.async.internal.Checked;
+import com.jwsphere.accumulo.async.internal.Checked.CheckedRunnable;
+import com.jwsphere.accumulo.async.internal.Checked.CheckedSupplier;
 import org.apache.accumulo.core.client.IteratorSetting;
 import org.apache.accumulo.core.client.admin.*;
 import org.apache.accumulo.core.client.sample.SamplerConfiguration;
@@ -16,13 +19,13 @@ import java.util.stream.StreamSupport;
 public class AsyncTableOperations {
 
     private final TableOperations tableOps;
-    private final ExecutorService executor;
+    private final Executor executor;
 
     public AsyncTableOperations(TableOperations operations) {
         this(operations, ForkJoinPool.commonPool());
     }
 
-    public AsyncTableOperations(TableOperations operations, ExecutorService executor) {
+    public AsyncTableOperations(TableOperations operations, Executor executor) {
         this.tableOps = operations;
         this.executor = executor;
     }
@@ -228,40 +231,11 @@ public class AsyncTableOperations {
     }
 
     private CompletionStage<Void> runAsync(CheckedRunnable runnable) {
-        return CompletableFuture.runAsync(propagate(runnable), executor);
+        return Checked.runAsync(runnable, executor);
     }
 
     private <T> CompletionStage<T> supplyAsync(CheckedSupplier<T> supplier) {
-        return CompletableFuture.supplyAsync(propagate(supplier), executor);
+        return Checked.supplyAsync(supplier, executor);
     }
 
-    private static Runnable propagate(CheckedRunnable runnable) {
-        return () -> {
-            try {
-                runnable.run();
-            } catch (Exception e) {
-                throw new CompletionException(e);
-            }
-        };
-    }
-
-    private static <T> Supplier<T> propagate(CheckedSupplier<T> supplier) {
-        return () -> {
-            try {
-                return supplier.get();
-            } catch (Exception e) {
-                throw new CompletionException(e);
-            }
-        };
-    }
-
-    @FunctionalInterface
-    private interface CheckedRunnable {
-        void run() throws Exception;
-    }
-
-    @FunctionalInterface
-    private interface CheckedSupplier<T> {
-        T get() throws Exception;
-    }
 }

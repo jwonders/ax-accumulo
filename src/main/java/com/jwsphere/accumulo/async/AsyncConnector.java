@@ -12,6 +12,7 @@ import org.apache.accumulo.core.client.Durability;
 import org.apache.accumulo.core.client.TableNotFoundException;
 import org.apache.accumulo.core.security.Authorizations;
 
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
@@ -20,14 +21,14 @@ import java.util.function.Function;
 public class AsyncConnector {
 
     private Connector connector;
-    private ExecutorService executor;
+    private Executor executor;
 
     public AsyncConnector(Connector connector) {
         this.connector = connector;
         this.executor = ForkJoinPool.commonPool();
     }
 
-    public AsyncConnector(Connector connector, ExecutorService executor) {
+    public AsyncConnector(Connector connector, Executor executor) {
         this.connector = connector;
         this.executor = executor;
     }

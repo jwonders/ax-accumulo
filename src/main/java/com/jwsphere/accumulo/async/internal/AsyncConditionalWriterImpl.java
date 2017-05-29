@@ -74,6 +74,11 @@ public class AsyncConditionalWriterImpl implements AsyncConditionalWriter {
         barrier.await();
     }
 
+    @Override
+    public void await(long timeout, TimeUnit unit) throws InterruptedException {
+        barrier.await(timeout, unit);
+    }
+
     private Collection<ConditionalWriter.Result> writeMutations(Collection<ConditionalMutation> mutations) {
         Iterator<ConditionalWriter.Result> resultIter = writer.write(mutations.iterator());
         List<ConditionalWriter.Result> results = new ArrayList<>(mutations.size());
