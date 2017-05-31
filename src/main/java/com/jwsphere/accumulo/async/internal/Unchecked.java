@@ -6,17 +6,9 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.function.Supplier;
 
-public class Checked {
+public class Unchecked {
 
-    public static CompletionStage<Void> runAsync(CheckedRunnable runnable, Executor executor) {
-        return CompletableFuture.runAsync(propagate(runnable), executor);
-    }
-
-    public static <T> CompletionStage<T> supplyAsync(CheckedSupplier<T> supplier, Executor executor) {
-        return CompletableFuture.supplyAsync(propagate(supplier), executor);
-    }
-
-    public static Runnable propagate(CheckedRunnable runnable) {
+    public static Runnable runnable(CheckedRunnable runnable) {
         return () -> {
             try {
                 runnable.run();
@@ -26,7 +18,7 @@ public class Checked {
         };
     }
 
-    public static <T> Supplier<T> propagate(CheckedSupplier<T> supplier) {
+    public static <T> Supplier<T> supplier(CheckedSupplier<T> supplier) {
         return () -> {
             try {
                 return supplier.get();
@@ -34,6 +26,14 @@ public class Checked {
                 throw new CompletionException(e);
             }
         };
+    }
+
+    public static CompletionStage<Void> runAsync(CheckedRunnable runnable, Executor executor) {
+        return CompletableFuture.runAsync(Unchecked.runnable(runnable), executor);
+    }
+
+    public static <T> CompletionStage<T> supplyAsync(CheckedSupplier<T> supplier, Executor executor) {
+        return CompletableFuture.supplyAsync(Unchecked.supplier(supplier), executor);
     }
 
     @FunctionalInterface

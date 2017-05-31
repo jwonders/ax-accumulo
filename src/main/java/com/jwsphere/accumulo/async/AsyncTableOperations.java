@@ -1,8 +1,8 @@
 package com.jwsphere.accumulo.async;
 
-import com.jwsphere.accumulo.async.internal.Checked;
-import com.jwsphere.accumulo.async.internal.Checked.CheckedRunnable;
-import com.jwsphere.accumulo.async.internal.Checked.CheckedSupplier;
+import com.jwsphere.accumulo.async.internal.Unchecked;
+import com.jwsphere.accumulo.async.internal.Unchecked.CheckedRunnable;
+import com.jwsphere.accumulo.async.internal.Unchecked.CheckedSupplier;
 import org.apache.accumulo.core.client.IteratorSetting;
 import org.apache.accumulo.core.client.admin.*;
 import org.apache.accumulo.core.client.sample.SamplerConfiguration;
@@ -13,7 +13,6 @@ import org.apache.hadoop.io.Text;
 
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.function.Supplier;
 import java.util.stream.StreamSupport;
 
 public class AsyncTableOperations {
@@ -231,11 +230,11 @@ public class AsyncTableOperations {
     }
 
     private CompletionStage<Void> runAsync(CheckedRunnable runnable) {
-        return Checked.runAsync(runnable, executor);
+        return CompletableFuture.runAsync(Unchecked.runnable(runnable), executor);
     }
 
     private <T> CompletionStage<T> supplyAsync(CheckedSupplier<T> supplier) {
-        return Checked.supplyAsync(supplier, executor);
+        return Unchecked.supplyAsync(supplier, executor);
     }
 
 }

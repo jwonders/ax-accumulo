@@ -1,8 +1,8 @@
 package com.jwsphere.accumulo.async.internal;
 
-import com.jwsphere.accumulo.async.internal.Checked.CheckedFunction;
-import com.jwsphere.accumulo.async.internal.Checked.CheckedRunnable;
-import com.jwsphere.accumulo.async.internal.Checked.CheckedSupplier;
+import com.jwsphere.accumulo.async.internal.Unchecked.CheckedFunction;
+import com.jwsphere.accumulo.async.internal.Unchecked.CheckedRunnable;
+import com.jwsphere.accumulo.async.internal.Unchecked.CheckedSupplier;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -10,7 +10,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
-public class Interruptibles {
+public class Interruptible {
 
     @FunctionalInterface
     public interface InterruptibleRunnable extends CheckedRunnable {

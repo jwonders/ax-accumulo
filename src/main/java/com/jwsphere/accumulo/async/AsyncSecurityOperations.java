@@ -1,10 +1,8 @@
 package com.jwsphere.accumulo.async;
 
-import com.jwsphere.accumulo.async.internal.Checked;
-import com.jwsphere.accumulo.async.internal.Checked.CheckedRunnable;
-import com.jwsphere.accumulo.async.internal.Checked.CheckedSupplier;
-import org.apache.accumulo.core.client.AccumuloException;
-import org.apache.accumulo.core.client.AccumuloSecurityException;
+import com.jwsphere.accumulo.async.internal.Unchecked;
+import com.jwsphere.accumulo.async.internal.Unchecked.CheckedRunnable;
+import com.jwsphere.accumulo.async.internal.Unchecked.CheckedSupplier;
 import org.apache.accumulo.core.client.admin.DelegationTokenConfig;
 import org.apache.accumulo.core.client.admin.SecurityOperations;
 import org.apache.accumulo.core.client.security.tokens.AuthenticationToken;
@@ -14,14 +12,10 @@ import org.apache.accumulo.core.security.Authorizations;
 import org.apache.accumulo.core.security.NamespacePermission;
 import org.apache.accumulo.core.security.SystemPermission;
 import org.apache.accumulo.core.security.TablePermission;
-import org.tukaani.xz.check.Check;
 
-import javax.naming.Name;
 import java.util.Set;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
-import java.util.concurrent.ExecutorService;
 
 public class AsyncSecurityOperations {
 
@@ -102,11 +96,11 @@ public class AsyncSecurityOperations {
     }
 
     private CompletionStage<Void> runAsync(CheckedRunnable runnable) {
-        return Checked.runAsync(runnable, executor);
+        return Unchecked.runAsync(runnable, executor);
     }
 
     private <T> CompletionStage<T> supplyAsync(CheckedSupplier<T> supplier) {
-        return Checked.supplyAsync(supplier, executor);
+        return Unchecked.supplyAsync(supplier, executor);
     }
 
 }
