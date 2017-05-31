@@ -6,15 +6,23 @@ import java.util.Collection;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 
-public interface AsyncBatchWriter extends AutoCloseable {
+public interface AsyncBatchWriter extends AutoCloseable, Barrier {
 
     CompletionStage<Void> submit(Mutation mutation) throws InterruptedException;
 
+    CompletionStage<Void> submit(Mutation mutation, long timeout, TimeUnit unit) throws InterruptedException;
+
+    CompletionStage<Void> trySubmit(Mutation mutation);
+
     CompletionStage<Void> submit(Collection<Mutation> mutations) throws InterruptedException;
+
+    CompletionStage<Void> submitMany(Collection<Mutation> mutations, long timeout, TimeUnit unit) throws InterruptedException;
+
+    CompletionStage<Void> trySubmitMany(Collection<Mutation> mutations);
 
     void await() throws InterruptedException;
 
-    void await(long timeout, TimeUnit unit) throws InterruptedException;
+    boolean await(long timeout, TimeUnit unit) throws InterruptedException;
 
     /**
      * Immediately attempts to stop writing mutations and closes underlying

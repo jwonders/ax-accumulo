@@ -9,7 +9,7 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 
 
-public interface AsyncConditionalWriter extends AutoCloseable {
+public interface AsyncConditionalWriter extends AutoCloseable, Barrier {
 
     /**
      * Submits a mutation for insertion into the table.  This method will return
@@ -101,7 +101,7 @@ public interface AsyncConditionalWriter extends AutoCloseable {
      *
      * @throws InterruptedException If this thread is interrupted while waiting.
      */
-    void await(long timeout, TimeUnit unit) throws InterruptedException;
+    boolean await(long timeout, TimeUnit unit) throws InterruptedException;
 
     /**
      * Immediately attempts to stop writing mutations and closes underlying

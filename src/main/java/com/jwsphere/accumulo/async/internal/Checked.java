@@ -46,4 +46,8 @@ public class Checked {
         T get() throws Exception;
     }
 
+    @FunctionalInterface
+    public interface CheckedFunction<T, R> {
+        R apply(T arg) throws Exception;
+    }
 }

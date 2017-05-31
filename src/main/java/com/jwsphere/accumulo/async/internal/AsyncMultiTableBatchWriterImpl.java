@@ -81,12 +81,14 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
     }
 
     @Override
-    public void await(long timeout, TimeUnit unit) throws InterruptedException {
+    public boolean await(long timeout, TimeUnit unit) throws InterruptedException {
         try {
-            flushTask.submit((new Await())).get(timeout, unit);
+            flushTask.submit(new Await()).get(timeout, unit);
+            return true;
         } catch (ExecutionException e) {
             throw new CompletionException(e);
         } catch (TimeoutException e) {
+            return false;
             // normal behavior
         }
     }
