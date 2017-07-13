@@ -18,6 +18,10 @@ import java.util.function.BiFunction;
  * previously submitted operations have completed.  A completion action is
  * associated with each operation to inform the barrier of completion.
  *
+ * This implementation attempts to only signal waiting threads when at least
+ * one should stop waiting.  It also attempts to balance the cost of submitting
+ * and completing operations with checking for completion.
+ *
  * Each operation is associated with a generation number upon submission and
  * this generation number is advanced upon each wait request.
  */

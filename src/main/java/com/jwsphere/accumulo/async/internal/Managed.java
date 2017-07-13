@@ -5,17 +5,47 @@ import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.ForkJoinTask;
 import java.util.function.Supplier;
 
+/**
+ * This class contains utilities to support managed blocking of tasks
+ * submitted to ForkJoinPool's.
+ *
+ * When submitting tasks that might block to a ForkJoinPool, especially
+ * the common pool, it is important to perform the task in the context of a
+ * managed block to inform the pool that it may need to create additional
+ * threads if all are currently blocked.
+ *
+ * Submitting many small tasks that may block a thread for long periods of
+ * time to a ForkJoinPool may lead to many threads being created.  It is
+ * probably better to consider using a separate bounded executor or using
+ * a cooperative mechanism in these cases.
+ */
 public class Managed {
 
+    private Managed() {
+        // hiding implicit default constructor
+    }
+
+    /**
+     * Decorates the provided runnable so it performs a managed block.
+     */
     public static Runnable runnable(Runnable runnable) {
+        if (runnable instanceof ManagedRunnable) {
+            return runnable;
+        }
         return new ManagedRunnable(runnable);
     }
 
+    /**
+     * Decorates the provided supplier so it performs a managed block.
+     */
     public static <T> Supplier<T> supplier(Supplier<T> supplier) {
+        if (supplier instanceof ManagedSupplier) {
+            return supplier;
+        }
         return new ManagedSupplier<>(supplier);
     }
 
-    public static final class ManagedSupplier<T> implements Supplier<T> {
+    private static final class ManagedSupplier<T> implements Supplier<T> {
 
         private final Supplier<T> supplier;
 
@@ -74,29 +104,33 @@ public class Managed {
 
     private static final class SupplierManagedBlocker<T> implements ForkJoinPool.ManagedBlocker {
 
+        private static final Object NIL = new Object();
+
         private final Supplier<T> supplier;
-        private T result;
-        private boolean done;
+        private volatile Object result;
 
         SupplierManagedBlocker(Supplier<T> supplier) {
             this.supplier = supplier;
-            this.done = false;
+            this.result = NIL;
         }
 
         @Override
         public boolean block() throws InterruptedException {
             result = supplier.get();
-            done = true;
             return true;
         }
 
         @Override
         public boolean isReleasable() {
-            return done;
+            return result != NIL;
         }
 
+        @SuppressWarnings("unchecked")
         public T getResult() {
-            return result;
+            if (result == NIL) {
+                throw new IllegalStateException();
+            }
+            return (T) result;
         }
 
     }
@@ -104,7 +138,7 @@ public class Managed {
     private static final class RunnableManagedBlocker implements ForkJoinPool.ManagedBlocker {
 
         private final Runnable runnable;
-        private boolean done;
+        private volatile boolean done;
 
         RunnableManagedBlocker(Runnable runnable) {
             this.runnable = runnable;

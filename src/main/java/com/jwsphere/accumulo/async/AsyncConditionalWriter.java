@@ -8,7 +8,10 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 
-
+/**
+ * A conditional writer that supports asynchronous writes as well as
+ * non-blocking interaction.
+ */
 public interface AsyncConditionalWriter extends AutoCloseable, Barrier {
 
     /**

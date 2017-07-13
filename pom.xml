@@ -12,23 +12,25 @@
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <junit.jupiter.version>5.0.0-M4</junit.jupiter.version>
         <junit.platform.version>1.0.0-M4</junit.platform.version>
+        <guava.version>14.0.1</guava.version>
+        <accumulo.version>1.8.1</accumulo.version>
     </properties>
 
     <dependencies>
         <dependency>
             <groupId>org.apache.accumulo</groupId>
             <artifactId>accumulo-core</artifactId>
-            <version>1.8.1</version>
+            <version>${accumulo.version}</version>
         </dependency>
         <dependency>
             <groupId>com.google.guava</groupId>
             <artifactId>guava</artifactId>
-            <version>14.0.1</version>
+            <version>${guava.version}</version>
         </dependency>
         <dependency>
             <groupId>org.apache.accumulo</groupId>
             <artifactId>accumulo-minicluster</artifactId>
-            <version>1.8.1</version>
+            <version>${accumulo.version}</version>
             <scope>test</scope>
         </dependency>
         <dependency>

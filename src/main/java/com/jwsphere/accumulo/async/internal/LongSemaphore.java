@@ -3,6 +3,14 @@ package com.jwsphere.accumulo.async.internal;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.AbstractQueuedLongSynchronizer;
 
+/**
+ * A counting semaphore capable of maintaining a large set of permits.
+ *
+ * The semaphore behaves similarly to {@link java.util.concurrent.Semaphore}
+ * but without support for fairness.  The primary use case for a high capacity
+ * semaphore is to control access to high capacity resources such as
+ * bytes of memory.
+ */
 public class LongSemaphore {
 
     private final Synchronizer sync;

@@ -116,10 +116,12 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
         private final String table;
         private final Mutation mutation;
+        private final long permits;
 
         FutureSingleMutation(String table, Mutation mutation) {
             this.table = table;
             this.mutation = mutation;
+            this.permits = mutation.estimatedMemoryUsed();
         }
 
         @Override
@@ -131,6 +133,11 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
             }
         }
 
+        @Override
+        public boolean complete(Void value) {
+            // TODO release permits
+            return super.complete(value);
+        }
     }
 
     private static final class FutureMutationBatch extends FutureMutation {

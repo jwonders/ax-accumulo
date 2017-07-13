@@ -54,7 +54,6 @@ public class MiniAccumuloProvider implements AccumuloProvider {
             }
         }
 
-
         @Override
         public String getAdminUser() {
             return "root";

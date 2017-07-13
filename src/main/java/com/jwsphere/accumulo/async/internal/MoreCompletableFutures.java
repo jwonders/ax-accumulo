@@ -25,4 +25,10 @@ public class MoreCompletableFutures {
         return CompletableFuture.supplyAsync(Unchecked.supplier(supplier), executor);
     }
 
+    public static <T> CompletableFuture<T> immediatelyFailed(Throwable t) {
+        CompletableFuture<T> future = new CompletableFuture<>();
+        future.completeExceptionally(t);
+        return future;
+    }
+
 }
