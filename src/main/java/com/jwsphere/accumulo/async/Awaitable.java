@@ -2,7 +2,7 @@ package com.jwsphere.accumulo.async;
 
 import java.util.concurrent.TimeUnit;
 
-public interface Barrier {
+public interface Awaitable {
 
     /**
      * Waits until the condition associated with the barrier is satisfied.

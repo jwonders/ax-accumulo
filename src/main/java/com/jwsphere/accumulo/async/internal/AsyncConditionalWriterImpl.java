@@ -4,6 +4,7 @@ import com.google.common.util.concurrent.RateLimiter;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.jwsphere.accumulo.async.AsyncConditionalWriter;
 import com.jwsphere.accumulo.async.AsyncConditionalWriterConfig;
+import com.jwsphere.accumulo.async.CapacityExceededException;
 import com.jwsphere.accumulo.async.SubmissionTimeoutException;
 import org.apache.accumulo.core.client.ConditionalWriter;
 import org.apache.accumulo.core.client.ConditionalWriter.Result;
@@ -58,7 +59,8 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
 
     private final long id = ID.getAndIncrement();
 
-    private final LongSemaphore capacityLimit;
+    private final long capacityLimit;
+    private final LongSemaphore capacityLimiter;
     private final RateLimiter rateLimiter;
 
     /**
@@ -67,51 +69,66 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
     public AsyncConditionalWriterImpl(Connector connector, String tableName, AsyncConditionalWriterConfig config) throws TableNotFoundException {
         this.writer = connector.createConditionalWriter(tableName, config.getConditionalWriterConfig());
         this.barrier = new CompletionBarrier();
-        this.capacityLimit = new LongSemaphore(config.getMemoryCapacityLimit().orElse(Long.MAX_VALUE));
         this.completionExecutor = defaultExecutor();
+        this.capacityLimit = config.getMemoryCapacityLimit().orElse(Long.MAX_VALUE);
+        this.capacityLimiter = new LongSemaphore(capacityLimit);
         this.rateLimiter = null;
     }
 
-    public AsyncConditionalWriterImpl(Connector connector, String tableName, AsyncConditionalWriterConfig config, ExecutorService executor) throws TableNotFoundException {
-        this.writer = connector.createConditionalWriter(tableName, config.getConditionalWriterConfig());
+    /**
+     * Creates an async conditional writer.
+     */
+    private AsyncConditionalWriterImpl(ConditionalWriter writer, ExecutorService completionExecutor,
+                                       long capacityLimit, LongSemaphore capacityLimiter, RateLimiter rateLimiter) {
+        this.writer = writer;
         this.barrier = new CompletionBarrier();
-        this.capacityLimit = new LongSemaphore(config.getMemoryCapacityLimit().orElse(Long.MAX_VALUE));
-        this.completionExecutor = executor;
-        this.rateLimiter = null;
+        this.completionExecutor = completionExecutor;
+        this.capacityLimit = capacityLimit;
+        this.capacityLimiter = capacityLimiter;
+        this.rateLimiter = rateLimiter;
+    }
+
+    public AsyncConditionalWriter withRateLimit(double bytesPerSecond) {
+        RateLimiter rateLimiter = RateLimiter.create(bytesPerSecond);
+        return new AsyncConditionalWriterImpl(writer, completionExecutor, capacityLimit, capacityLimiter, rateLimiter);
     }
 
     @Override
     public CompletionStage<ConditionalWriter.Result> submit(ConditionalMutation cm) throws InterruptedException {
         long permits = cm.numBytes();
+        if (permits > capacityLimit) {
+            return MoreCompletableFutures.immediatelyFailed(new CapacityExceededException(permits, capacityLimit));
+        }
         obeyRateLimit(permits);
-        capacityLimit.acquire(permits);
+        capacityLimiter.acquire(permits);
         return doSubmit(cm, permits);
     }
 
     @Override
     public CompletionStage<Result> submit(ConditionalMutation cm, long timeout, TimeUnit unit) throws InterruptedException {
         long permits = cm.numBytes();
+        if (permits > capacityLimit) {
+            return MoreCompletableFutures.immediatelyFailed(new CapacityExceededException(permits, capacityLimit));
+        }
         long remaining = obeyRateLimit(permits, timeout, unit);
         if (remaining <= 0) {
             return MoreCompletableFutures.immediatelyFailed(SUBMISSION_TIMEOUT);
         }
-        capacityLimit.tryAcquire(permits, remaining, unit);
+        capacityLimiter.tryAcquire(permits, remaining, unit);
         return doSubmit(cm, permits);
-    }
-
-    private long getRemainingInCorrectUnits(long timeout, TimeUnit unit, long start) {
-        long remaining = timeout - (System.nanoTime() - start);
-        return unit.convert(remaining, TimeUnit.NANOSECONDS);
     }
 
     @Override
     public CompletionStage<Result> trySubmit(ConditionalMutation cm) {
         long permits = cm.numBytes();
+        if (permits > capacityLimit) {
+            return MoreCompletableFutures.immediatelyFailed(new CapacityExceededException(permits, capacityLimit));
+        }
         boolean allowed = tryObeyRateLimit(permits);
         if (!allowed) {
             return MoreCompletableFutures.immediatelyFailed(SUBMISSION_TIMEOUT);
         }
-        capacityLimit.tryAcquire(permits);
+        capacityLimiter.tryAcquire(permits);
         return doSubmit(cm, permits);
     }
 
@@ -126,30 +143,39 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
     @Override
     public CompletionStage<Collection<ConditionalWriter.Result>> submitMany(Collection<ConditionalMutation> mutations) throws InterruptedException {
         long permits = countPermits(mutations);
+        if (permits > capacityLimit) {
+            return MoreCompletableFutures.immediatelyFailed(new CapacityExceededException(permits, capacityLimit));
+        }
         obeyRateLimit(permits);
-        capacityLimit.acquire(permits);
+        capacityLimiter.acquire(permits);
         return doSubmitMany(mutations, permits);
     }
 
     @Override
     public CompletionStage<Collection<Result>> submitMany(Collection<ConditionalMutation> mutations, long timeout, TimeUnit unit) throws InterruptedException {
         long permits = countPermits(mutations);
+        if (permits > capacityLimit) {
+            return MoreCompletableFutures.immediatelyFailed(new CapacityExceededException(permits, capacityLimit));
+        }
         long remaining = obeyRateLimit(permits, timeout, unit);
         if (remaining <= 0) {
             return MoreCompletableFutures.immediatelyFailed(SUBMISSION_TIMEOUT);
         }
-        capacityLimit.acquire(permits);
+        capacityLimiter.acquire(permits);
         return doSubmitMany(mutations, permits);
     }
 
     @Override
     public CompletionStage<Collection<Result>> trySubmitMany(Collection<ConditionalMutation> mutations) {
         long permits = countPermits(mutations);
+        if (permits > capacityLimit) {
+            return MoreCompletableFutures.immediatelyFailed(new CapacityExceededException(permits, capacityLimit));
+        }
         boolean allowed = tryObeyRateLimit(permits);
         if (!allowed) {
             return MoreCompletableFutures.immediatelyFailed(SUBMISSION_TIMEOUT);
         }
-        capacityLimit.tryAcquire(permits);
+        capacityLimiter.tryAcquire(permits);
         return doSubmitMany(mutations, permits);
     }
 
@@ -185,6 +211,11 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
         return timeout;
     }
 
+    private long getRemainingInCorrectUnits(long timeout, TimeUnit unit, long start) {
+        long remaining = timeout - (System.nanoTime() - start);
+        return unit.convert(remaining, TimeUnit.NANOSECONDS);
+    }
+
     private boolean limitRate(long permits, long timeout, TimeUnit unit) {
         if (permits > Integer.MAX_VALUE) {
             // in practice this should never happen and would probably break Accumulo
@@ -213,7 +244,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
         try {
             return writer.write(mutations.iterator());
         } catch (Throwable e) {
-            capacityLimit.release(permits);
+            capacityLimiter.release(permits);
             throw e;
         }
     }
@@ -286,7 +317,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
                 // release permits prior to calling complete in case the caller
                 // schedules dependent completion actions to run in this thread,
                 // particularly those that submit more mutations to this writer
-                capacityLimit.release(permits);
+                capacityLimiter.release(permits);
             }
         }
 
@@ -320,7 +351,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
                 // release permits prior to calling complete in case the caller
                 // schedules dependent completion actions to run in this thread,
                 // particularly those that submit more mutations to this writer
-                capacityLimit.release(permits);
+                capacityLimiter.release(permits);
             }
         }
 

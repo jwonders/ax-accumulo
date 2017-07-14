@@ -1,6 +1,6 @@
 package com.jwsphere.accumulo.async.internal;
 
-import com.jwsphere.accumulo.async.Barrier;
+import com.jwsphere.accumulo.async.Awaitable;
 
 import javax.annotation.concurrent.GuardedBy;
 import java.util.Map;
@@ -25,7 +25,7 @@ import java.util.function.BiFunction;
  * Each operation is associated with a generation number upon submission and
  * this generation number is advanced upon each wait request.
  */
-public class CompletionBarrier implements Barrier {
+public class CompletionBarrier implements Awaitable {
 
     private static final BiFunction<Long, Long, Long> GENERATION_INCOMPLETE_INCREMENTER =
             (generation, incomplete) -> incomplete == null ? 1 : incomplete + 1;

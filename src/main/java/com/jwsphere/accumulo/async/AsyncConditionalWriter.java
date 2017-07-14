@@ -12,7 +12,7 @@ import java.util.concurrent.TimeUnit;
  * A conditional writer that supports asynchronous writes as well as
  * non-blocking interaction.
  */
-public interface AsyncConditionalWriter extends AutoCloseable, Barrier {
+public interface AsyncConditionalWriter extends AutoCloseable, Awaitable {
 
     /**
      * Submits a mutation for insertion into the table.  This method will return

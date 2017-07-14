@@ -6,7 +6,7 @@ import java.util.Collection;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 
-public interface AsyncMultiTableBatchWriter extends AutoCloseable, Barrier {
+public interface AsyncMultiTableBatchWriter extends AutoCloseable, Awaitable {
 
     /**
      * Asynchronously inserts a mutation into the table.

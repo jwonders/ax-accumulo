@@ -6,7 +6,7 @@ import java.util.Collection;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 
-public interface AsyncBatchWriter extends AutoCloseable, Barrier {
+public interface AsyncBatchWriter extends AutoCloseable, Awaitable {
 
     CompletionStage<Void> submit(Mutation mutation) throws InterruptedException;
 

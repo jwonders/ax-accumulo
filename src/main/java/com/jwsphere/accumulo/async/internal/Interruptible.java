@@ -24,7 +24,7 @@ public class Interruptible {
 
     @FunctionalInterface
     public interface InterruptibleFunction<T, R> extends CheckedFunction<T, R> {
-        R apply(T arg);
+        R apply(T arg) throws InterruptedException;
     }
 
     @FunctionalInterface
@@ -71,6 +71,17 @@ public class Interruptible {
             failed.completeExceptionally(e);
             return failed;
         }
+    }
+
+    public static <T, U> Function<T, U> propagateInterrupt(InterruptibleFunction<T, U> function) {
+        return arg -> {
+            try {
+                return function.apply(arg);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new RuntimeException(e);
+            }
+        };
     }
 
 }
