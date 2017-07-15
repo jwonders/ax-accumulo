@@ -14,12 +14,17 @@ import java.util.concurrent.Executor;
 import static com.jwsphere.accumulo.async.internal.MoreCompletableFutures.runAsync;
 import static com.jwsphere.accumulo.async.internal.MoreCompletableFutures.supplyAsync;
 
+/**
+ * An asynchronous interface for performing {@link NamespaceOperations}.
+ *
+ * @author Jonathan Wonders
+ */
 public class AsyncNamespaceOperations {
 
     private final NamespaceOperations namespaceOps;
     private final Executor executor;
 
-    public AsyncNamespaceOperations(NamespaceOperations namespaceOps, Executor executor) {
+    AsyncNamespaceOperations(NamespaceOperations namespaceOps, Executor executor) {
         this.namespaceOps = namespaceOps;
         this.executor = executor;
     }

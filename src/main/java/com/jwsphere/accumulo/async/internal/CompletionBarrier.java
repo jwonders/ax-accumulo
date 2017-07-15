@@ -24,6 +24,8 @@ import java.util.function.BiFunction;
  *
  * Each operation is associated with a generation number upon submission and
  * this generation number is advanced upon each wait request.
+ *
+ * @author Jonathan Wonders
  */
 public class CompletionBarrier implements Awaitable {
 

@@ -11,6 +11,8 @@ import java.util.concurrent.TimeUnit;
 /**
  * A conditional writer that supports asynchronous writes as well as
  * non-blocking interaction.
+ *
+ * @author Jonathan Wonders
  */
 public interface AsyncConditionalWriter extends AutoCloseable, Awaitable {
 

@@ -1,5 +1,11 @@
 package com.jwsphere.accumulo.async;
 
+/**
+ * Indicates that a requested operation exceeds the capacity for allowed
+ * operations and that sufficient resources cannot be acquired.
+ *
+ * @author Jonathan Wonders
+ */
 public class CapacityExceededException extends IllegalArgumentException {
 
     private final long capacityRequired;

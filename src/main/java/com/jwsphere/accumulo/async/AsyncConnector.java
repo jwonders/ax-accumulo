@@ -11,6 +11,12 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 import java.util.function.Function;
 
+/**
+ * A wrapper around an Accumulo {@link Connector} that executes blocking
+ * operations asynchronously and exposes an asynchronous API.
+ *
+ * @author Jonathan Wonders
+ */
 public class AsyncConnector {
 
     private Connector connector;

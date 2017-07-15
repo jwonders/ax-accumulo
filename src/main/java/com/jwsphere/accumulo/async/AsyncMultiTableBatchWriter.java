@@ -6,6 +6,11 @@ import java.util.Collection;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * An asynchronous interface for interacting with a {@code MultiTableBatchWriter}
+ *
+ * @author Jonathan Wonders
+ */
 public interface AsyncMultiTableBatchWriter extends AutoCloseable, Awaitable {
 
     /**

@@ -1,3 +1,11 @@
+/*
+ * This implementation was derived from a source file with the
+ * following notice.
+ *
+ * Written by Doug Lea with assistance from members of JCP JSR-166
+ * Expert Group and released to the public domain, as explained at
+ * http://creativecommons.org/licenses/publicdomain
+ */
 package com.jwsphere.accumulo.async.internal;
 
 import java.util.concurrent.TimeUnit;
@@ -10,6 +18,8 @@ import java.util.concurrent.locks.AbstractQueuedLongSynchronizer;
  * but without support for fairness.  The primary use case for a high capacity
  * semaphore is to control access to high capacity resources such as
  * bytes of memory.
+ *
+ * @author Jonathan Wonders
  */
 public class LongSemaphore {
 

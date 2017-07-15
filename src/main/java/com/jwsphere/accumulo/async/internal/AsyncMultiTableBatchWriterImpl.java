@@ -13,7 +13,6 @@ import org.apache.accumulo.core.data.Mutation;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -21,9 +20,13 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 
+/**
+ * @author Jonathan Wonders
+ */
 public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWriter {
 
     private static final SubmissionTimeoutException SUBMISSION_TIMEOUT = new SubmissionTimeoutException();
@@ -32,6 +35,7 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
     private final ExecutorService executorService = Executors.newSingleThreadExecutor();
     private final FlushTask flushTask;
+    private final LongSemaphore capacityLimit = new LongSemaphore(50 * 1024 * 1024);
 
     /**
      * Creates an async multi table batch writer.  Ownership of the writer
@@ -47,32 +51,32 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
     @Override
     public CompletionStage<Void> submit(String table, Mutation mutation) throws InterruptedException {
-        return flushTask.submit(new FutureSingleMutation(table, mutation));
+        return flushTask.submit(new FutureSingleMutation(table, mutation, capacityLimit));
     }
 
     @Override
     public CompletionStage<Void> submit(String table, Mutation mutation, long timeout, TimeUnit unit) throws InterruptedException {
-        return flushTask.submit(new FutureSingleMutation(table, mutation), timeout, unit);
+        return flushTask.submit(new FutureSingleMutation(table, mutation, capacityLimit), timeout, unit);
     }
 
     @Override
     public CompletionStage<Void> trySubmit(String table, Mutation mutation) {
-        return flushTask.trySubmit(new FutureSingleMutation(table, mutation));
+        return flushTask.trySubmit(new FutureSingleMutation(table, mutation, capacityLimit));
     }
 
     @Override
     public CompletionStage<Void> submitMany(String table, Collection<Mutation> mutations) throws InterruptedException {
-        return flushTask.submit(new FutureMutationBatch(table, mutations));
+        return flushTask.submit(new FutureMutationBatch(table, mutations, capacityLimit));
     }
 
     @Override
     public CompletionStage<Void> submitMany(String table, Collection<Mutation> mutations, long timeout, TimeUnit unit) throws InterruptedException {
-        return flushTask.submit(new FutureMutationBatch(table, mutations), timeout, unit);
+        return flushTask.submit(new FutureMutationBatch(table, mutations, capacityLimit), timeout, unit);
     }
 
     @Override
     public CompletionStage<Void> trySubmitMany(String table, Collection<Mutation> mutations) {
-        return flushTask.trySubmit(new FutureMutationBatch(table, mutations));
+        return flushTask.trySubmit(new FutureMutationBatch(table, mutations, capacityLimit));
     }
 
     @Override
@@ -108,20 +112,93 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
     private static abstract class FutureMutation extends CompletableFuture<Void> {
 
+        abstract long size();
+
+        abstract void acquire() throws InterruptedException;
+
+        abstract void acquire(long timeout, TimeUnit unit) throws InterruptedException;
+
+        abstract boolean tryAcquire();
+
         abstract void submit(MultiTableBatchWriter writer) throws MutationsRejectedException;
+
+        /*
+         * Not overriding completeExceptionally because that would either allow the
+         * submitter to call a method that releases permits or that may encounter a
+         * race condition.  These complete methods should ONLY be called following
+         * the acquisition of permits.
+         */
+        abstract boolean internalCompleteExceptionally(Throwable t);
+
+        /*
+         * Not overriding completeExceptionally because that would either allow the
+         * submitter to call a method that releases permits or that may encounter a
+         * race condition.
+         */
+        abstract boolean internalComplete();
 
     }
 
-    private static final class FutureSingleMutation extends FutureMutation {
+    private static abstract class CapacityLimitedFutureMutation extends FutureMutation {
+
+        private final long permits;
+        private LongSemaphore capacityLimit;
+
+        CapacityLimitedFutureMutation(long permits, LongSemaphore capacityLimit) {
+            this.permits = permits;
+            this.capacityLimit = capacityLimit;
+        }
+
+        @Override
+        public long size() {
+            return permits;
+        }
+
+        @Override
+        void acquire() throws InterruptedException {
+
+        }
+
+        @Override
+        void acquire(long timeout, TimeUnit unit) throws InterruptedException {
+
+        }
+
+        boolean tryAcquire() {
+            return true;
+        }
+
+        @Override
+        boolean internalCompleteExceptionally(Throwable t) {
+            if (capacityLimit != null) {
+                capacityLimit.release(permits);
+                capacityLimit = null;
+                return completeExceptionally(t);
+            }
+            throw new IllegalStateException("Only one complete method may be called exactly once.");
+        }
+
+        @Override
+        boolean internalComplete() {
+            if (capacityLimit != null) {
+                capacityLimit.release(permits);
+                capacityLimit = null;
+                return complete(null);
+            }
+            throw new IllegalStateException("Only one complete method may be called exactly once.");
+        }
+
+    }
+
+    private static final class FutureSingleMutation extends CapacityLimitedFutureMutation {
 
         private final String table;
         private final Mutation mutation;
-        private final long permits;
 
-        FutureSingleMutation(String table, Mutation mutation) {
+        FutureSingleMutation(String table, Mutation mutation, LongSemaphore capacityLimit) {
+            super(mutation.estimatedMemoryUsed(), capacityLimit);
             this.table = table;
             this.mutation = mutation;
-            this.permits = mutation.estimatedMemoryUsed();
         }
 
         @Override
@@ -133,19 +210,15 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
             }
         }
 
-        @Override
-        public boolean complete(Void value) {
-            // TODO release permits
-            return super.complete(value);
-        }
     }
 
-    private static final class FutureMutationBatch extends FutureMutation {
+    private static final class FutureMutationBatch extends CapacityLimitedFutureMutation {
 
         private final String table;
         private final Collection<Mutation> mutations;
 
-        FutureMutationBatch(String table, Collection<Mutation> mutations) {
+        FutureMutationBatch(String table, Collection<Mutation> mutations, LongSemaphore capacityLimit) {
+            super(computePermits(mutations), capacityLimit);
             this.table = table;
             this.mutations = mutations;
         }
@@ -159,13 +232,51 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
             }
         }
 
+        private static long computePermits(Collection<Mutation> mutations) {
+            long permits = 0;
+            for (Mutation mutation : mutations) {
+                permits += mutation.estimatedMemoryUsed();
+            }
+            return permits;
+        }
+
     }
 
     private static final class Await extends FutureMutation {
 
         @Override
+        long size() {
+            return 0L;
+        }
+
+        @Override
+        void acquire() throws InterruptedException {
+
+        }
+
+        @Override
+        void acquire(long timeout, TimeUnit unit) throws InterruptedException {
+
+        }
+
+        @Override
+        boolean tryAcquire() {
+            return true;
+        }
+
+        @Override
         void submit(MultiTableBatchWriter writer) {
             // nothing to submit
+        }
+
+        @Override
+        boolean internalCompleteExceptionally(Throwable t) {
+            return true;
+        }
+
+        @Override
+        boolean internalComplete() {
+            return true;
         }
 
     }
@@ -175,26 +286,27 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
         private final BlockingQueue<FutureMutation> queue;
         private final List<FutureMutation> batch;
         private final RateLimiter limiter;
-        private final int capacity;
+        private final long batchCapacityInBytes;
 
         private volatile boolean shutdown = false;
 
-        FlushTask(int capacity, int flushesPerSecondLimit) {
-            // ideally capacity would be based on memory
-            this.capacity = capacity;
-            this.queue = new ArrayBlockingQueue<>(capacity);
-            this.batch = new ArrayList<>(capacity);
+        FlushTask(long batchCapacity, int flushesPerSecondLimit) {
+            this.batchCapacityInBytes = batchCapacity;
+            this.queue = new LinkedBlockingQueue<>();
+            this.batch = new ArrayList<>();
             this.limiter = RateLimiter.create(flushesPerSecondLimit);
         }
 
         FutureMutation submit(FutureMutation mutation) throws InterruptedException {
             ensureNotShutdown();
+            mutation.acquire();
             queue.put(mutation);
             return mutation;
         }
 
         FutureMutation submit(FutureMutation mutation, long timeout, TimeUnit unit) throws InterruptedException {
             ensureNotShutdown();
+
             boolean added = queue.offer(mutation, timeout, unit);
             if (!added) {
                 mutation.completeExceptionally(SUBMISSION_TIMEOUT);
@@ -222,11 +334,12 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
             try {
                 while (!Thread.currentThread().isInterrupted() && !shutdown) {
                     try {
-                        batch.add(queue.take());
+                        nextBatch();
                     } catch (InterruptedException e) {
+                        // inform the executor about the interrupt
+                        Thread.currentThread().interrupt();
                         return;
                     }
-                    queue.drainTo(batch, capacity - 1);
                     try {
                         for (FutureMutation mutation : batch) {
                             mutation.submit(writer);
@@ -247,6 +360,23 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
                     writer.close();
                 } catch (MutationsRejectedException e) {
                     // everything must have already been failed
+                }
+            }
+        }
+
+        private void nextBatch() throws InterruptedException {
+            long batchSize = 0;
+            FutureMutation first = queue.take();
+            batchSize += first.size();
+            batch.add(first);
+
+            FutureMutation fm;
+            while ((fm = queue.peek()) != null) {
+                if (batchSize + fm.size() < batchCapacityInBytes) {
+                    batchSize += fm.size();
+                    batch.add(queue.poll());
+                } else {
+                    break;
                 }
             }
         }

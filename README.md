@@ -41,12 +41,15 @@ with ways to construct async writers.
 
 ## Async Writers
 
-Create an `AsyncConditionalWriter`.  The `AsyncConditionalWriterConfig` is
-similar to the normal `ConditionalWriterConfig` but also allows configuring
-a limit for the memory consumed by in-flight submitted mutations to avoid
-out of memory errors.  The `AsyncConditionalWriterConfig` is immutable unlike
-the `ConditionalWriterConfig` so it is safe to pass around to components that
-might need to specialize aspects like authorizations or durability.
+Creating an `AsyncConditionalWriter` is similar to creating a `ConditionalWriter`
+using the Accumulo API.  First, create an `AsyncConditionalWriterConfig`.
+It is similar to the `ConditionalWriterConfig` but also supports configuring
+a limit for the memory consumed by in-flight submitted mutations.  We don't
+want to run out of memory now, do we.
+
+It is certainly possible to limit memory usage at the application level.  
+If you have another mechanism for avoiding out of memory errors, this can 
+be set to `Long.MAX_VALUE`.
 
 ``` java
 AsyncConditionalWriterConfig config = AsyncConditionalWriterConfig.create()

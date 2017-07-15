@@ -2,6 +2,12 @@ package com.jwsphere.accumulo.async;
 
 import java.util.concurrent.TimeUnit;
 
+/**
+ * Represents a operation that may or may not be complete and provides
+ * a way to wait for the operation to complete.
+ *
+ * @author Jonathan Wonders
+ */
 public interface Awaitable {
 
     /**

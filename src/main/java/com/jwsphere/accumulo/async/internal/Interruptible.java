@@ -10,6 +10,11 @@ import java.util.concurrent.CompletionStage;
 import java.util.function.Function;
 import java.util.function.Supplier;
 
+/**
+ * Utilities for working with interruptible functions.
+ *
+ * @author Jonathan Wonders
+ */
 public class Interruptible {
 
     @FunctionalInterface

@@ -15,16 +15,21 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.stream.StreamSupport;
 
+/**
+ * An asynchronous interface for performing table operations.
+ *
+ * @author Jonathan Wonders
+ */
 public class AsyncTableOperations {
 
     private final TableOperations tableOps;
     private final Executor executor;
 
-    public AsyncTableOperations(TableOperations operations) {
+    AsyncTableOperations(TableOperations operations) {
         this(operations, ForkJoinPool.commonPool());
     }
 
-    public AsyncTableOperations(TableOperations operations, Executor executor) {
+    AsyncTableOperations(TableOperations operations, Executor executor) {
         this.tableOps = operations;
         this.executor = executor;
     }

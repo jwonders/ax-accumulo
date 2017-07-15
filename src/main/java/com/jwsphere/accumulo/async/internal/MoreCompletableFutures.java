@@ -7,6 +7,9 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
 
+/**
+ * @author Jonathan Wonders
+ */
 public class MoreCompletableFutures {
 
     public static CompletableFuture<Void> runAsync(CheckedRunnable runnable, Executor executor) {

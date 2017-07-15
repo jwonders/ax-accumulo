@@ -18,6 +18,8 @@ import java.util.function.Supplier;
  * time to a ForkJoinPool may lead to many threads being created.  It is
  * probably better to consider using a separate bounded executor or using
  * a cooperative mechanism in these cases.
+ *
+ * @author Jonathan Wonders
  */
 public class Managed {
 

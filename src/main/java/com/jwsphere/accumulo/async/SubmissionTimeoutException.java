@@ -2,6 +2,13 @@ package com.jwsphere.accumulo.async;
 
 import java.util.concurrent.CancellationException;
 
+/**
+ * Indicates that a resource required for submission could not be acquired
+ * within a limited time bound.  This could be due to a strict capacity
+ * limit or a looser rate limit.
+ *
+ * @author Jonathan Wonders
+ */
 public class SubmissionTimeoutException extends CancellationException {
 
     public SubmissionTimeoutException() {

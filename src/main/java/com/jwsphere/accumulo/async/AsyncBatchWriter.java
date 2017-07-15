@@ -6,6 +6,11 @@ import java.util.Collection;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * An asynchronous interface for interacting with a batch writer.
+ *
+ * @author Jonathan Wonders
+ */
 public interface AsyncBatchWriter extends AutoCloseable, Awaitable {
 
     CompletionStage<Void> submit(Mutation mutation) throws InterruptedException;

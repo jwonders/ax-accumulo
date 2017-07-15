@@ -8,6 +8,11 @@ import javax.annotation.Nullable;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 
+/**
+ * An immutable configuration object that allows for configuring the
+ * parameters exposed through {@link ConditionalWriterConfig} as well
+ * as parameters specific to the async implementation.
+ */
 public class AsyncConditionalWriterConfig {
 
     private final ConditionalWriterConfig config;

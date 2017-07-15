@@ -17,12 +17,17 @@ import java.util.Set;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 
+/**
+ * An asynchronous interface for performing {@link SecurityOperations}
+ *
+ * @author Jonathan Wonders
+ */
 public class AsyncSecurityOperations {
 
     private final SecurityOperations securityOps;
     private final Executor executor;
 
-    public AsyncSecurityOperations(SecurityOperations securityOps, Executor executor) {
+    AsyncSecurityOperations(SecurityOperations securityOps, Executor executor) {
         this.securityOps = securityOps;
         this.executor = executor;
     }

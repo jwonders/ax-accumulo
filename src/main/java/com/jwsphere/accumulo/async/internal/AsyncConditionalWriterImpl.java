@@ -45,6 +45,8 @@ import java.util.concurrent.atomic.AtomicLong;
  * should be much smaller the the JVM heap and be sized based on how much data
  * needs to be batched to get acceptable throughput.  Higher capacities will
  * likely incur higher latencies when saturated.
+ *
+ * @author Jonathan Wonders
  */
 public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter {
 

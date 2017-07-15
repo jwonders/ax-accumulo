@@ -6,6 +6,11 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.function.Supplier;
 
+/**
+ * Utilities working for functions that throw checked exceptions.
+ *
+ * @author Jonathan Wonders
+ */
 public class Unchecked {
 
     public static Runnable runnable(CheckedRunnable runnable) {
