@@ -38,7 +38,7 @@ public class AsyncMultiTableBatchWriterImplTest {
 
     @Test
     public void testPutOne() throws Exception {
-        AsyncConnector asyncConnector = new AsyncConnector(connector);
+        AsyncConnector asyncConnector = AsyncConnector.wrap(connector);
         BatchWriterConfig config = new BatchWriterConfig();
         try (AsyncMultiTableBatchWriter bw = asyncConnector.createMultiTableBatchWriter(config)) {
             Mutation m = new Mutation("put one");
@@ -52,7 +52,7 @@ public class AsyncMultiTableBatchWriterImplTest {
 
     @Test
     public void testAwait() throws Exception {
-        AsyncConnector asyncConnector = new AsyncConnector(connector);
+        AsyncConnector asyncConnector = AsyncConnector.wrap(connector);
         BatchWriterConfig config = new BatchWriterConfig();
         try (AsyncMultiTableBatchWriter bw = asyncConnector.createMultiTableBatchWriter(config)) {
             Mutation m = new Mutation("await");

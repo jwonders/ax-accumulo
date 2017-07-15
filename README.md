@@ -1,33 +1,67 @@
 # ax-accumulo
+
 Asynchronous extensions to Accumulo
+
+The ax-accumulo project wraps existing Accumulo APIs for asynchronous execution 
+in background threads.  It relies heavily on Java 8 `CompletionStage` and
+`CompletableFuture` to communicate results to the original caller and allow
+for composition of dependent actions.
+
+## Why
+
+There are classes of problems that involve highly concurrent multi-step
+operations across multiple Accumulo rows.  Throughput is essential, but
+minimizing end-to-end latency is an important secondary goal.
+
+Accumulo is fundamentally capable of achieving very good performance for
+this type of problem.  However, it can be cumbersome to implement a 
+solution with the existing APIs and there are pitfalls to avoid.
 
 ## Disclaimer
 
-This project is not ready to be used yet.
+This project is a work-in-progress and should not be considered stable.
 
-## Usage
+## Entry Point
 
-The usage is a work in progress, but the general feel should stay the same.
+The entry point to functionality is the `AsyncConnector` which can wrap an
+existing Accumulo `Connector`, optionally with a default `Executor` for async
+operations.  By default the executor will be the `ForkJoinPool.commonPool()`
 
-Wrap a `Connector` in an `AsyncConnector`.
+    Connector connector = ...
+    AsyncConnector.wrap(connector);
+
+    Executor executor = task -> task.run()
+    AsyncConnector.wrap(connector, executor)
+
+The `AsyncConnector` exposes an API that parallels the Accumulo APIs but
+performs operations asynchronously.  You will see methods for async table
+operations, async security operations, and async namespace operations along
+with ways to construct async writers.
+
+
+## Async Writers
+
+Create an `AsyncConditionalWriter`.  The `AsyncConditionalWriterConfig` is
+similar to the normal `ConditionalWriterConfig` but also allows configuring
+a limit for the memory consumed by in-flight submitted mutations to avoid
+out of memory errors.  The `AsyncConditionalWriterConfig` is immutable unlike
+the `ConditionalWriterConfig` so it is safe to pass around to components that
+might need to specialize aspects like authorizations or durability.
 
 ``` java
-Connector connector = ...
-AsyncConnector axConnector = new AsyncConnector(connector); 
-```
-    
-Create an `AsyncConditionalWriter`
-``` java
-ConditionalWriterConfig config = new ConditionalWriterConfig()
-    .setAuthorizations(new Authorizations("A", "B", "C"))
-    .setDurability(Durability.FLUSH)
-    .setTimeout(1, TimeUnit.MINUTES)
-    .setMaxWriteThreads(4);
+AsyncConditionalWriterConfig config = AsyncConditionalWriterConfig.create()
+  .withAuthorizations(new Authorizations("A", "B", "C"))
+  .withDurability(Durability.FLUSH)
+  .withTimeout(1, TimeUnit.MINUTES)
+  .withMaxWriteThreads(4)
+  .withLimitedMemoryCapacity(10 * 1024 * 1024);
                 
 AsyncConditionalWriter axWriter = axConnector.createConditionalWriter("table", config);
 ```
 
-Write mutations that are dependent on each other and chain them together.
+An `AsyncConditionalWriter` simplifies writing mutations that are dependent
+on each other as well as performing other actions upon notification that a 
+write has completed.
 
 ``` java
 ConditionalMutation a = new ConditionalMutation("row");
@@ -42,12 +76,18 @@ ConditionalMutation c = new ConditionalMutation("row");
 c.addCondition(new Condition("cf", "cq").setValue("b"));
 c.put("cf", "cq", "c");
 
-CompletionStage<Result> resultStage = axWriter.submit(a).toCompletableFuture()
+CompletionStage<Result> resultStage = axWriter.submit(a)
     .thenCompose(x -> failOnInterrupt(() -> axWriter.submit(b)))
     .thenCompose(x -> failOnInterrupt(() -> axWriter.submit(c)));
 ```
 
-Wait for previously submitted mutations to complete.
+Occasionally it is necessary to perform some work asynchronously and then
+wait for all of the previously submitted work to complete before moving on.
+The amount of work might be very large and retaining references to futures 
+could prevent memory from being reclaimed by GC in a timely manner.  The
+`AsyncConditionalWriter` provides `await` methods that will block until all
+previously submitted mutations have been written.  The completion is tracked
+in a very memory-efficient way to avoid aforementioned problems.
 
 ``` java
 axWriter.await();

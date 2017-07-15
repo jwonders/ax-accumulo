@@ -26,6 +26,7 @@ public class AsyncConditionalWriterImplTest {
 
     private static AccumuloProvider accumulo;
     private static Connector connector;
+    private static AsyncConnector asyncConnector;
 
     @BeforeAll
     public static void beforeAll(AccumuloProvider accumulo) throws Exception {
@@ -35,6 +36,7 @@ public class AsyncConditionalWriterImplTest {
                 accumulo.getAccumuloCluster().getZooKeepers()
         );
         connector = instance.getConnector(accumulo.getAdminUser(), accumulo.getAdminToken());
+        asyncConnector = AsyncConnector.wrap(connector);
         connector.tableOperations().create("table");
     }
 
@@ -45,7 +47,6 @@ public class AsyncConditionalWriterImplTest {
 
     @Test
     public void testPutOne() throws Exception {
-        AsyncConnector asyncConnector = new AsyncConnector(connector);
         AsyncConditionalWriterConfig config = AsyncConditionalWriterConfig.create();
         try (AsyncConditionalWriter writer = asyncConnector.createConditionalWriter("table", config)) {
             ConditionalMutation cm = new ConditionalMutation("put_one");
@@ -60,7 +61,6 @@ public class AsyncConditionalWriterImplTest {
 
     @Test
     public void testAwait() throws Exception {
-        AsyncConnector asyncConnector = new AsyncConnector(connector);
         AsyncConditionalWriterConfig config = AsyncConditionalWriterConfig.create();
         try (AsyncConditionalWriter writer = asyncConnector.createConditionalWriter("table", config)) {
             ConditionalMutation cm = new ConditionalMutation("await");
@@ -77,7 +77,6 @@ public class AsyncConditionalWriterImplTest {
 
     @Test
     public void putSeveralDependent() throws Exception {
-        AsyncConnector asyncConnector = new AsyncConnector(connector);
         AsyncConditionalWriterConfig config = AsyncConditionalWriterConfig.create();
         try (AsyncConditionalWriter writer = asyncConnector.createConditionalWriter("table", config)) {
 
@@ -102,7 +101,6 @@ public class AsyncConditionalWriterImplTest {
     @Test
     public void ensureExceedingCapacityFailsCleanly() throws Exception {
 
-        AsyncConnector asyncConnector = new AsyncConnector(connector);
         AsyncConditionalWriterConfig config = AsyncConditionalWriterConfig.create()
                 .withLimitedMemoryCapacity(1024);
 
@@ -122,7 +120,6 @@ public class AsyncConditionalWriterImplTest {
 
     @Test
     public void ensureDependentMutationSubmissionsDoNotBlock() throws Exception {
-        AsyncConnector asyncConnector = new AsyncConnector(connector);
         AsyncConditionalWriterConfig config = AsyncConditionalWriterConfig.create()
                 .withLimitedMemoryCapacity(1024);
 

@@ -16,12 +16,7 @@ public class AsyncConnector {
     private Connector connector;
     private Executor executor;
 
-    public AsyncConnector(Connector connector) {
-        this.connector = connector;
-        this.executor = ForkJoinPool.commonPool();
-    }
-
-    public AsyncConnector(Connector connector, Executor executor) {
+    private AsyncConnector(Connector connector, Executor executor) {
         this.connector = connector;
         this.executor = executor;
     }
@@ -49,4 +44,13 @@ public class AsyncConnector {
     public AsyncMultiTableBatchWriter createMultiTableBatchWriter(BatchWriterConfig config) {
         return new AsyncMultiTableBatchWriterImpl(connector.createMultiTableBatchWriter(config));
     }
+
+    public static AsyncConnector wrap(Connector connector) {
+        return wrap(connector, ForkJoinPool.commonPool());
+    }
+
+    public static AsyncConnector wrap(Connector connector, Executor defaultExecutor) {
+        return new AsyncConnector(connector, defaultExecutor);
+    }
+
 }
