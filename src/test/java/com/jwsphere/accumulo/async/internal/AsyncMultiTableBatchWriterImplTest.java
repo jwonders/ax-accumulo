@@ -1,5 +1,9 @@
-package com.jwsphere.accumulo.async;
+package com.jwsphere.accumulo.async.internal;
 
+import com.jwsphere.accumulo.async.AccumuloParameterResolver;
+import com.jwsphere.accumulo.async.AccumuloProvider;
+import com.jwsphere.accumulo.async.AsyncConnector;
+import com.jwsphere.accumulo.async.AsyncMultiTableBatchWriter;
 import org.apache.accumulo.core.client.BatchWriterConfig;
 import org.apache.accumulo.core.client.Connector;
 import org.apache.accumulo.core.client.ZooKeeperInstance;
