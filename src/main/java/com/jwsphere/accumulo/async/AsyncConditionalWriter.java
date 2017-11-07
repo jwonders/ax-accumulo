@@ -6,37 +6,78 @@ import org.apache.accumulo.core.data.ConditionalMutation;
 import java.util.Collection;
 import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 
 /**
- * A conditional writer that supports asynchronous writes as well as
- * non-blocking interaction.
+ * <p>
+ * A conditional writer that supports asynchronous writes and non-blocking
+ * interaction.  This paradigm is well suited for applications that perform
+ * many independent writes, especially when there are different contexts
+ * associated with each individual write.
+ * </p>
+ *
+ * <p>
+ * A web service that might serve many users concurrently is a motivating example.
+ * </p>
+ *
+ * <p>
+ * Another goal is to simplify the implementation of multi-mutation transactions
+ * by providing a clear API for scheduling dependent mutations to be written
+ * sequentially while allowing independent mutations to be written concurrently.
+ * </p>
  *
  * @author Jonathan Wonders
  */
 public interface AsyncConditionalWriter extends AutoCloseable, Awaitable {
 
     /**
-     * Submits a mutation for insertion into the table.  This method will return
-     * immediately after submission, but may block when there is insufficient
+     * Submits a mutation for asynchronous insertion into the table.  This method
+     * will return following submission, and may block when there is insufficient
      * capacity to accept the mutation.
      *
      * @return A completion stage for the insert.  Successful completion entails
-     * that the mutation has been applied to the table with the configured durability.
+     * the mutation has been committed to the table.  Exceptional completion
+     * does not guarantee that the mutation has not been committed.
      */
-    ConditionalWriteStage submit(ConditionalMutation cm) throws InterruptedException;
+    WriteStage submit(ConditionalMutation cm) throws InterruptedException;
 
     /**
-     * Submits a mutation for insertion into the table.  This method will return
-     * immediately after submission, but may block when there is insufficient
+     * Submits a mutation for asynchronous insertion into the table.  This method
+     * will return immediately as submission is performed asynchronously via the
+     * provided executor.
+     *
+     * @return A completion stage for the insert.  Successful completion entails
+     * the mutation has been committed to the table.  Exceptional completion
+     * does not guarantee that the mutation has not been committed.
+     */
+    WriteStage submitAsync(ConditionalMutation cm, Executor executor);
+
+    /**
+     * Submits a mutation for asynchronous insertion into the table.  This method
+     * will return following submission, and may block when there is insufficient
      * capacity to accept the mutation.  If there is insufficient capacity and
-     * the requested timeout elapses, the submission will be cancelled and the
+     * the provided timeout elapses, the submission will be cancelled and the
      * resulting completion stage will exhibit a {@link CancellationException}.
      *
      * @return A completion stage for the insert.  Successful completion entails
-     * that the mutation has been applied to the table with the configured durability.
+     * the mutation has been committed to the table.  Exceptional completion
+     * does not guarantee that the mutation has not been committed.
      */
-    ConditionalWriteStage submit(ConditionalMutation cm, long timeout, TimeUnit unit) throws InterruptedException;
+    WriteStage submit(ConditionalMutation cm, long timeout, TimeUnit unit) throws InterruptedException;
+
+    /**
+     * Submits a mutation for asynchronous insertion into the table.  This method
+     * will return immediately as submission is performed asynchronously via the
+     * provided executor.  If there is insufficient capacity and the requested
+     * timeout elapses, the submission will be cancelled and the resulting
+     * completion stage will exhibit a {@link CancellationException}.
+     *
+     * @return A completion stage for the insert.  Successful completion entails
+     * the mutation has been committed to the table.  Exceptional completion
+     * does not guarantee that the mutation has not been committed.
+     */
+    WriteStage submitAsync(ConditionalMutation cm, Executor executor, long timeout, TimeUnit unit);
 
     /**
      * Attempts to submit a mutation for insertion into the table.  This method
@@ -47,7 +88,7 @@ public interface AsyncConditionalWriter extends AutoCloseable, Awaitable {
      * @return A completion stage for the insert.  Successful completion entails
      * that the mutation has been applied to the table with the configured durability.
      */
-    ConditionalWriteStage trySubmit(ConditionalMutation cm);
+    WriteStage trySubmit(ConditionalMutation cm);
 
     /**
      * Submits a collection of mutations for insertion into the table.  This
@@ -61,7 +102,7 @@ public interface AsyncConditionalWriter extends AutoCloseable, Awaitable {
      * collectively such that only when all complete, will the completion stage
      * exhibit a result.
      */
-    ConditionalBatchWriteStage submitMany(Collection<ConditionalMutation> mutations) throws InterruptedException;
+    BatchWriteStage submitMany(Collection<ConditionalMutation> mutations) throws InterruptedException;
 
     /**
      * Submits a collection of mutations for insertion into the table.  This
@@ -72,7 +113,7 @@ public interface AsyncConditionalWriter extends AutoCloseable, Awaitable {
      * collectively such that only when all complete, will the completion stage
      * exhibit a result.
      */
-    ConditionalBatchWriteStage submitMany(Collection<ConditionalMutation> mutations, long timeout, TimeUnit unit) throws InterruptedException;
+    BatchWriteStage submitMany(Collection<ConditionalMutation> mutations, long timeout, TimeUnit unit) throws InterruptedException;
 
     /**
      * Attempts to submit a collection of mutations for insertion into the table.
@@ -84,7 +125,7 @@ public interface AsyncConditionalWriter extends AutoCloseable, Awaitable {
      * collectively such that only when all complete, will the completion stage
      * exhibit a result.
      */
-    ConditionalBatchWriteStage trySubmitMany(Collection<ConditionalMutation> mutations);
+    BatchWriteStage trySubmitMany(Collection<ConditionalMutation> mutations);
 
     /**
      * Creates a rate limited conditional writer.
@@ -120,5 +161,37 @@ public interface AsyncConditionalWriter extends AutoCloseable, Awaitable {
      * mutations has stopped and prior to calling close.
      */
     void close();
+
+    interface WriteStage extends CompletionStage<Result> {
+
+        WriteStage thenSubmit(ConditionalMutation cm);
+
+        WriteStage thenSubmit(ConditionalMutation cm, long timeout, TimeUnit unit);
+
+        WriteStage thenTrySubmit(ConditionalMutation cm);
+
+        BatchWriteStage thenSubmit(Collection<ConditionalMutation> cm);
+
+        BatchWriteStage thenSubmit(Collection<ConditionalMutation> cm, long timeout, TimeUnit unit);
+
+        BatchWriteStage thenTrySubmit(Collection<ConditionalMutation> cm);
+
+    }
+
+    interface BatchWriteStage extends CompletionStage<Collection<Result>> {
+
+        WriteStage thenSubmit(ConditionalMutation cm);
+
+        WriteStage thenSubmit(ConditionalMutation cm, long timeout, TimeUnit unit);
+
+        WriteStage thenTrySubmit(ConditionalMutation cm);
+
+        BatchWriteStage thenSubmit(Collection<ConditionalMutation> cm);
+
+        BatchWriteStage thenSubmit(Collection<ConditionalMutation> cm, long timeout, TimeUnit unit);
+
+        BatchWriteStage thenTrySubmit(Collection<ConditionalMutation> cm);
+
+    }
 
 }

@@ -2,6 +2,7 @@ package com.jwsphere.accumulo.async.internal;
 
 import com.jwsphere.accumulo.async.AccumuloParameterResolver;
 import com.jwsphere.accumulo.async.AccumuloProvider;
+import com.jwsphere.accumulo.async.AsyncBatchWriter;
 import com.jwsphere.accumulo.async.AsyncConnector;
 import com.jwsphere.accumulo.async.AsyncMultiTableBatchWriter;
 import org.apache.accumulo.core.client.BatchWriterConfig;
@@ -48,6 +49,21 @@ public class AsyncMultiTableBatchWriterImplTest {
             Mutation m = new Mutation("put one");
             m.put("cf", "cq", "value");
             CompletableFuture<Void> op = bw.submit("table", m).toCompletableFuture();
+            op.get();
+            assertTrue(op.isDone());
+            assertFalse(op.isCompletedExceptionally());
+        }
+    }
+
+    @Test
+    public void testCachedBatchWriterPutOne() throws Exception {
+        AsyncConnector asyncConnector = AsyncConnector.wrap(connector);
+        BatchWriterConfig config = new BatchWriterConfig();
+        try (AsyncMultiTableBatchWriter bw = asyncConnector.createMultiTableBatchWriter(config)) {
+            AsyncBatchWriter abw = bw.getBatchWriter("table");
+            Mutation m = new Mutation("put one cached bw");
+            m.put("cf", "cq", "value");
+            CompletableFuture<Void> op = abw.submit(m).toCompletableFuture();
             op.get();
             assertTrue(op.isDone());
             assertFalse(op.isCompletedExceptionally());

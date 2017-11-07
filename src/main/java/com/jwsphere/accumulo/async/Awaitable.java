@@ -6,6 +6,9 @@ import java.util.concurrent.TimeUnit;
  * Represents a operation that may or may not be complete and provides
  * a way to wait for the operation to complete.
  *
+ * Similar in nature to a {@code Future<Void>} but without a notion of
+ * cancellation
+ *
  * @author Jonathan Wonders
  */
 public interface Awaitable {

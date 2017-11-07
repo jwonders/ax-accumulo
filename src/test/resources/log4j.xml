@@ -14,6 +14,11 @@
         <appender-ref ref="console"/>
     </logger>
 
+    <logger name="com.jwsphere" additivity="false">
+        <level value="trace"/>
+        <appender-ref ref="console"/>
+    </logger>
+
     <root>
         <level value="info"/>
         <appender-ref ref="console" />

@@ -8,12 +8,12 @@ import org.junit.jupiter.api.extension.ParameterResolver;
 public class AccumuloParameterResolver implements ParameterResolver {
 
     @Override
-    public boolean supports(ParameterContext parameterContext, ExtensionContext extensionContext) throws ParameterResolutionException {
+    public boolean supportsParameter(ParameterContext parameterContext, ExtensionContext extensionContext) throws ParameterResolutionException {
         return AccumuloProvider.class.isAssignableFrom(parameterContext.getParameter().getType());
     }
 
     @Override
-    public Object resolve(ParameterContext parameterContext, ExtensionContext extensionContext) throws ParameterResolutionException {
+    public Object resolveParameter(ParameterContext parameterContext, ExtensionContext extensionContext) throws ParameterResolutionException {
         return new MiniAccumuloProvider();
     }
 
