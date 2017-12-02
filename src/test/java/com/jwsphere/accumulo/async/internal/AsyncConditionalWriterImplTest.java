@@ -3,10 +3,9 @@ package com.jwsphere.accumulo.async.internal;
 import com.jwsphere.accumulo.async.AccumuloParameterResolver;
 import com.jwsphere.accumulo.async.AccumuloProvider;
 import com.jwsphere.accumulo.async.AsyncConditionalWriter;
-import com.jwsphere.accumulo.async.AsyncConditionalWriter.WriteStage;
+import com.jwsphere.accumulo.async.AsyncConditionalWriter.SingleWriteStage;
 import com.jwsphere.accumulo.async.AsyncConditionalWriterConfig;
 import com.jwsphere.accumulo.async.AsyncConnector;
-import com.jwsphere.accumulo.async.CapacityExceededException;
 import org.apache.accumulo.core.client.ConditionalWriter.Result;
 import org.apache.accumulo.core.client.ConditionalWriter.Status;
 import org.apache.accumulo.core.client.Connector;
@@ -81,7 +80,7 @@ public class AsyncConditionalWriterImplTest {
                 cm2.addCondition(new Condition("cf2", "cq2"));
                 cm2.put("cf2".getBytes(UTF_8), "cq2".getBytes(UTF_8), payload);
 
-                WriteStage second = writer.submit(cm1).thenSubmit(cm2, 100, TimeUnit.MILLISECONDS);
+                SingleWriteStage second = writer.submit(cm1).thenSubmit(cm2, 100, TimeUnit.MILLISECONDS);
 
                 second.toCompletableFuture().join();
             }

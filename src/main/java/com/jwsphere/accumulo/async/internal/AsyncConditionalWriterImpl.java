@@ -1,5 +1,6 @@
 package com.jwsphere.accumulo.async.internal;
 
+import com.google.common.collect.Iterators;
 import com.google.common.util.concurrent.RateLimiter;
 import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.jwsphere.accumulo.async.AsyncConditionalWriter;
@@ -28,10 +29,10 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.ThreadPoolExecutor.AbortPolicy;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
-import java.util.function.BiConsumer;
 import java.util.function.Function;
 
 import static com.jwsphere.accumulo.async.internal.Interruptible.propagateInterrupt;
+import static com.jwsphere.accumulo.async.internal.MoreCompletableFutures.propagateResultTo;
 
 /**
  * The asynchronous conditional writer allows a bounded size of mutations to
@@ -102,7 +103,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
     }
 
     @Override
-    public WriteStage submit(ConditionalMutation cm) throws InterruptedException {
+    public SingleWriteStage submit(ConditionalMutation cm) throws InterruptedException {
         long permits = cm.numBytes();
         if (permits > capacityLimit) {
             return failedConditionalWriteFuture(new CapacityExceededException(permits, capacityLimit));
@@ -113,7 +114,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
     }
 
     @Override
-    public WriteStage submitAsync(ConditionalMutation cm, Executor executor) {
+    public SingleWriteStage submitAsync(ConditionalMutation cm, Executor executor) {
         CompletableWriteFuture stage = new CompletableWriteFuture(this);
 
         CompletableFuture.supplyAsync(Interruptible.supplier(() -> submit(cm)), executor)
@@ -124,7 +125,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
     }
 
     @Override
-    public WriteStage submit(ConditionalMutation cm, long timeout, TimeUnit unit) throws InterruptedException {
+    public SingleWriteStage submit(ConditionalMutation cm, long timeout, TimeUnit unit) throws InterruptedException {
         long permits = cm.numBytes();
         if (permits > capacityLimit) {
             return failedConditionalWriteFuture(new CapacityExceededException(permits, capacityLimit));
@@ -138,7 +139,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
     }
 
     @Override
-    public WriteStage submitAsync(ConditionalMutation cm, Executor executor, long timeout, TimeUnit unit) {
+    public SingleWriteStage submitAsync(ConditionalMutation cm, Executor executor, long timeout, TimeUnit unit) {
         CompletableWriteFuture stage = new CompletableWriteFuture(this);
 
         CompletableFuture.supplyAsync(Interruptible.supplier(() -> submit(cm, timeout, unit)), executor)
@@ -149,7 +150,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
     }
 
     @Override
-    public WriteStage trySubmit(ConditionalMutation cm) {
+    public SingleWriteStage trySubmit(ConditionalMutation cm) {
         long permits = cm.numBytes();
         if (permits > capacityLimit) {
             return failedConditionalWriteFuture(new CapacityExceededException(permits, capacityLimit));
@@ -162,22 +163,12 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
         return doSubmit(cm, permits);
     }
 
-    private WriteStage doSubmit(ConditionalMutation cm, long permits) {
+    private SingleWriteStage doSubmit(ConditionalMutation cm, long permits) {
         Iterator<Result> resultIter = getResultIteratorOrReleasePermits(cm, permits);
         CompleteOneTask task = new CompleteOneTask(resultIter, permits);
-        completionExecutor.execute(task.task());
+        completionExecutor.execute(task);
         barrier.submit(task);
         return task;
-    }
-
-    private static BiConsumer<Result, Throwable> propagateResultTo(CompletableWriteFuture stage) {
-        return (r, e) -> {
-            if (e == null) {
-                stage.complete(r);
-            } else {
-                stage.completeExceptionally(e);
-            }
-        };
     }
 
     @Override
@@ -222,19 +213,9 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
     private BatchWriteStage doSubmitMany(Collection<ConditionalMutation> mutations, long permits) {
         Iterator<Result> resultIter = getResultIteratorOrReleasePermits(mutations, permits);
         CompleteManyTask task = new CompleteManyTask(resultIter, mutations.size(), permits);
-        completionExecutor.execute(task.task());
+        completionExecutor.execute(task);
         barrier.submit(task);
         return task;
-    }
-
-    private static BiConsumer<Collection<Result>, Throwable> propagateResultsTo(CompletableBatchWriteFuture stage) {
-        return (r, e) -> {
-            if (e == null) {
-                stage.complete(r);
-            } else {
-                stage.completeExceptionally(e);
-            }
-        };
     }
 
     private void obeyRateLimit(long permits) {
@@ -287,12 +268,16 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
     }
 
     private Iterator<Result> getResultIteratorOrReleasePermits(ConditionalMutation cm, long permits) {
-        return getResultIteratorOrReleasePermits(Collections.singleton(cm), permits);
+        return getResultIteratorOrReleasePermits(Iterators.singletonIterator(cm), permits);
     }
 
     private Iterator<Result> getResultIteratorOrReleasePermits(Collection<ConditionalMutation> mutations, long permits) {
+        return getResultIteratorOrReleasePermits(mutations.iterator(), permits);
+    }
+
+    private Iterator<Result> getResultIteratorOrReleasePermits(Iterator<ConditionalMutation> mutations, long permits) {
         try {
-            return writer.write(mutations.iterator());
+            return writer.write(mutations);
         } catch (Throwable e) {
             capacityLimiter.release(permits);
             throw e;
@@ -341,7 +326,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
                 TimeUnit.SECONDS, new LinkedBlockingQueue<>(), tf, new AbortPolicy());
     }
 
-    interface WriteFuture extends Future<Result>, WriteStage {
+    interface WriteFuture extends Future<Result>, SingleWriteStage {
 
         @Override
         WriteFuture thenSubmit(ConditionalMutation cm);
@@ -385,7 +370,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
 
     }
 
-    private final class CompleteOneTask extends CompletableWriteFuture implements WriteFuture {
+    private final class CompleteOneTask extends CompletableWriteFuture implements Runnable, WriteFuture {
 
         private Iterator<Result> resultIter;
         private final long permits;
@@ -396,14 +381,12 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
             this.permits = permits;
         }
 
-        Runnable task() {
-            return () -> {
-                try {
-                    complete(getResult());
-                } catch (Throwable e) {
-                    completeExceptionally(e);
-                }
-            };
+        public void run() {
+            try {
+                complete(getResult());
+            } catch (Throwable e) {
+                completeExceptionally(e);
+            }
         }
 
         private Result getResult() {
@@ -420,7 +403,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
 
     }
 
-    private final class CompleteManyTask extends CompletableBatchWriteFuture implements BatchWriteFuture {
+    private final class CompleteManyTask extends CompletableBatchWriteFuture implements Runnable, BatchWriteFuture {
 
         private Iterator<ConditionalWriter.Result> resultIter;
         private final int count;
@@ -433,14 +416,12 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
             this.permits = permits;
         }
 
-        Runnable task() {
-            return () -> {
-                try {
-                    complete(getResults());
-                } catch (Throwable e) {
-                    completeExceptionally(e);
-                }
-            };
+        public void run() {
+            try {
+                complete(getResults());
+            } catch (Throwable e) {
+                completeExceptionally(e);
+            }
         }
 
         private List<ConditionalWriter.Result> getResults() {
@@ -488,7 +469,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
             return thenSubmit(result -> writer.trySubmit(cm));
         }
 
-        private WriteFuture thenSubmit(InterruptibleFunction<Result, WriteStage> submitter) {
+        private WriteFuture thenSubmit(InterruptibleFunction<Result, SingleWriteStage> submitter) {
             CompletableWriteFuture composed = new CompletableWriteFuture(writer);
             thenCompose(propagateInterrupt(submitter)).whenCompleteAsync(propagateResultTo(composed));
             return composed;
@@ -511,7 +492,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
 
         private BatchWriteFuture thenSubmitMany(InterruptibleFunction<Result, BatchWriteStage> submitter) {
             CompletableBatchWriteFuture composed = new CompletableBatchWriteFuture(writer);
-            thenCompose(propagateInterrupt(submitter)).whenCompleteAsync(propagateResultsTo(composed));
+            thenCompose(propagateInterrupt(submitter)).whenCompleteAsync(propagateResultTo(composed));
             return composed;
         }
 
@@ -540,7 +521,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
             return thenSubmit(result -> writer.trySubmit(cm));
         }
 
-        private WriteFuture thenSubmit(InterruptibleFunction<Collection<Result>, WriteStage> submitter) {
+        private WriteFuture thenSubmit(InterruptibleFunction<Collection<Result>, SingleWriteStage> submitter) {
             CompletableWriteFuture composed = new CompletableWriteFuture(writer);
             thenCompose(propagateInterrupt(submitter)).whenCompleteAsync(propagateResultTo(composed));
             return composed;
@@ -563,7 +544,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
 
         private BatchWriteFuture thenSubmitMany(InterruptibleFunction<Collection<Result>, BatchWriteStage> submitter) {
             CompletableBatchWriteFuture composed = new CompletableBatchWriteFuture(writer);
-            thenCompose(propagateInterrupt(submitter)).whenCompleteAsync(propagateResultsTo(composed));
+            thenCompose(propagateInterrupt(submitter)).whenCompleteAsync(propagateResultTo(composed));
             return composed;
         }
 

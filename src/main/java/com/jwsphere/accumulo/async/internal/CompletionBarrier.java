@@ -18,6 +18,16 @@ import java.util.function.BiFunction;
  * previously submitted operations have completed.  A completion action is
  * associated with each operation to inform the barrier of completion.
  *
+ * This completion barrier differs from a count-down latch in several ways.
+ * It allows different callers of await to wait for different sets of completions.
+ * It does not require up-front knowledge of the number of total completions.
+ *
+ * The trade-off for these features is that it does take up more space and likely
+ * takes more time to process completions compared to a simple count-down latch.
+ * It is best-suited for tracking operations that have latency measurably larger
+ * than the time-scale of processing completions and also when a reasonably small
+ * number of barriers are needed at a given time.
+ *
  * This implementation attempts to only signal waiting threads when at least
  * one should stop waiting.  It also attempts to balance the cost of submitting
  * and completing operations with checking for completion.

@@ -92,7 +92,7 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
     @Override
     public MutationWriteStage submitAsync(String table, Mutation mutation, Executor executor, long timeout, TimeUnit unit) {
-        return null;
+        throw new UnsupportedOperationException("TODO");
     }
 
     @Override
@@ -107,7 +107,7 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
     @Override
     public MutationWriteStage submitManyAsync(String table, Collection<Mutation> mutations, Executor executor) {
-        return null;
+        throw new UnsupportedOperationException("TODO");
     }
 
     @Override
@@ -117,7 +117,7 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
     @Override
     public MutationWriteStage submitManyAsync(String table, Collection<Mutation> mutations, Executor executor, long timeout, TimeUnit unit) {
-        return null;
+        throw new UnsupportedOperationException("TODO");
     }
 
     @Override

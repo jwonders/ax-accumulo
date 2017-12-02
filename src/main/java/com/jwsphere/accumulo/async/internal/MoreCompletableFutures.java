@@ -6,6 +6,7 @@ import com.jwsphere.accumulo.async.internal.Unchecked.CheckedSupplier;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
+import java.util.function.BiConsumer;
 
 /**
  * @author Jonathan Wonders
@@ -32,6 +33,16 @@ public class MoreCompletableFutures {
         CompletableFuture<T> future = new CompletableFuture<>();
         future.completeExceptionally(t);
         return future;
+    }
+
+    public static <T, U extends CompletableFuture<? super T>> BiConsumer<T, Throwable> propagateResultTo(U stage) {
+        return (r, e) -> {
+            if (e == null) {
+                stage.complete(r);
+            } else {
+                stage.completeExceptionally(e);
+            }
+        };
     }
 
 }
