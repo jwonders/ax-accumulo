@@ -9,7 +9,7 @@ for composition of dependent actions.
 
 ## Why
 
-There are classes of problems that involve highly concurrent multi-step
+There are a number of problems that benefit from highly concurrent multi-step
 operations across multiple Accumulo rows.  Throughput is essential, but
 minimizing end-to-end latency is an important secondary goal.
 
@@ -20,6 +20,7 @@ solution with the existing APIs and there are pitfalls to avoid.
 ## Disclaimer
 
 This project is a work-in-progress and should not be considered stable.
+Anyone who chooses to use it does so at their own risk.
 
 ## Entry Point
 
@@ -80,8 +81,8 @@ c.addCondition(new Condition("cf", "cq").setValue("b"));
 c.put("cf", "cq", "c");
 
 CompletionStage<Result> resultStage = axWriter.submit(a)
-    .thenCompose(x -> failOnInterrupt(() -> axWriter.submit(b)))
-    .thenCompose(x -> failOnInterrupt(() -> axWriter.submit(c)));
+    .thenSubmit(b)
+    .thenSubmit(c);
 ```
 
 Occasionally it is necessary to perform some work asynchronously and then

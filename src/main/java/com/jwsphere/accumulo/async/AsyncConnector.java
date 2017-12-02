@@ -48,7 +48,7 @@ public class AsyncConnector {
     }
 
     public AsyncMultiTableBatchWriter createMultiTableBatchWriter(BatchWriterConfig config) {
-        return new AsyncMultiTableBatchWriterImpl(connector.createMultiTableBatchWriter(config));
+        return new AsyncMultiTableBatchWriterImpl(() -> connector.createMultiTableBatchWriter(config));
     }
 
     public static AsyncConnector wrap(Connector connector) {

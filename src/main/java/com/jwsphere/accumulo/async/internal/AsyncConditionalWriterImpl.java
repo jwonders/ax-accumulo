@@ -5,11 +5,8 @@ import com.google.common.util.concurrent.ThreadFactoryBuilder;
 import com.jwsphere.accumulo.async.AsyncConditionalWriter;
 import com.jwsphere.accumulo.async.AsyncConditionalWriterConfig;
 import com.jwsphere.accumulo.async.CapacityExceededException;
-import com.jwsphere.accumulo.async.ConditionalBatchWriteFuture;
-import com.jwsphere.accumulo.async.ConditionalBatchWriteStage;
-import com.jwsphere.accumulo.async.ConditionalWriteFuture;
-import com.jwsphere.accumulo.async.ConditionalWriteStage;
 import com.jwsphere.accumulo.async.SubmissionTimeoutException;
+import com.jwsphere.accumulo.async.internal.Interruptible.InterruptibleFunction;
 import org.apache.accumulo.core.client.ConditionalWriter;
 import org.apache.accumulo.core.client.ConditionalWriter.Result;
 import org.apache.accumulo.core.client.Connector;
@@ -22,14 +19,19 @@ import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
+import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ThreadFactory;
 import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.ThreadPoolExecutor.AbortPolicy;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BiConsumer;
+import java.util.function.Function;
+
+import static com.jwsphere.accumulo.async.internal.Interruptible.propagateInterrupt;
 
 /**
  * The asynchronous conditional writer allows a bounded size of mutations to
@@ -100,7 +102,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
     }
 
     @Override
-    public ConditionalWriteStage submit(ConditionalMutation cm) throws InterruptedException {
+    public WriteStage submit(ConditionalMutation cm) throws InterruptedException {
         long permits = cm.numBytes();
         if (permits > capacityLimit) {
             return failedConditionalWriteFuture(new CapacityExceededException(permits, capacityLimit));
@@ -111,7 +113,18 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
     }
 
     @Override
-    public ConditionalWriteStage submit(ConditionalMutation cm, long timeout, TimeUnit unit) throws InterruptedException {
+    public WriteStage submitAsync(ConditionalMutation cm, Executor executor) {
+        CompletableWriteFuture stage = new CompletableWriteFuture(this);
+
+        CompletableFuture.supplyAsync(Interruptible.supplier(() -> submit(cm)), executor)
+                .thenCompose(Function.identity())
+                .whenComplete(propagateResultTo(stage));
+
+        return stage;
+    }
+
+    @Override
+    public WriteStage submit(ConditionalMutation cm, long timeout, TimeUnit unit) throws InterruptedException {
         long permits = cm.numBytes();
         if (permits > capacityLimit) {
             return failedConditionalWriteFuture(new CapacityExceededException(permits, capacityLimit));
@@ -125,7 +138,18 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
     }
 
     @Override
-    public ConditionalWriteStage trySubmit(ConditionalMutation cm) {
+    public WriteStage submitAsync(ConditionalMutation cm, Executor executor, long timeout, TimeUnit unit) {
+        CompletableWriteFuture stage = new CompletableWriteFuture(this);
+
+        CompletableFuture.supplyAsync(Interruptible.supplier(() -> submit(cm, timeout, unit)), executor)
+                .thenCompose(Function.identity())
+                .whenComplete(propagateResultTo(stage));
+
+        return stage;
+    }
+
+    @Override
+    public WriteStage trySubmit(ConditionalMutation cm) {
         long permits = cm.numBytes();
         if (permits > capacityLimit) {
             return failedConditionalWriteFuture(new CapacityExceededException(permits, capacityLimit));
@@ -138,7 +162,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
         return doSubmit(cm, permits);
     }
 
-    private ConditionalWriteStage doSubmit(ConditionalMutation cm, long permits) {
+    private WriteStage doSubmit(ConditionalMutation cm, long permits) {
         Iterator<Result> resultIter = getResultIteratorOrReleasePermits(cm, permits);
         CompleteOneTask task = new CompleteOneTask(resultIter, permits);
         completionExecutor.execute(task.task());
@@ -146,8 +170,18 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
         return task;
     }
 
+    private static BiConsumer<Result, Throwable> propagateResultTo(CompletableWriteFuture stage) {
+        return (r, e) -> {
+            if (e == null) {
+                stage.complete(r);
+            } else {
+                stage.completeExceptionally(e);
+            }
+        };
+    }
+
     @Override
-    public ConditionalBatchWriteStage submitMany(Collection<ConditionalMutation> mutations) throws InterruptedException {
+    public BatchWriteStage submitMany(Collection<ConditionalMutation> mutations) throws InterruptedException {
         long permits = countPermits(mutations);
         if (permits > capacityLimit) {
             return failedConditionalBatchWriteFuture(new CapacityExceededException(permits, capacityLimit));
@@ -158,7 +192,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
     }
 
     @Override
-    public ConditionalBatchWriteStage submitMany(Collection<ConditionalMutation> mutations, long timeout, TimeUnit unit) throws InterruptedException {
+    public BatchWriteStage submitMany(Collection<ConditionalMutation> mutations, long timeout, TimeUnit unit) throws InterruptedException {
         long permits = countPermits(mutations);
         if (permits > capacityLimit) {
             return failedConditionalBatchWriteFuture(new CapacityExceededException(permits, capacityLimit));
@@ -172,7 +206,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
     }
 
     @Override
-    public ConditionalBatchWriteStage trySubmitMany(Collection<ConditionalMutation> mutations) {
+    public BatchWriteStage trySubmitMany(Collection<ConditionalMutation> mutations) {
         long permits = countPermits(mutations);
         if (permits > capacityLimit) {
             return failedConditionalBatchWriteFuture(new CapacityExceededException(permits, capacityLimit));
@@ -185,12 +219,22 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
         return doSubmitMany(mutations, permits);
     }
 
-    private ConditionalBatchWriteStage doSubmitMany(Collection<ConditionalMutation> mutations, long permits) {
+    private BatchWriteStage doSubmitMany(Collection<ConditionalMutation> mutations, long permits) {
         Iterator<Result> resultIter = getResultIteratorOrReleasePermits(mutations, permits);
         CompleteManyTask task = new CompleteManyTask(resultIter, mutations.size(), permits);
         completionExecutor.execute(task.task());
         barrier.submit(task);
         return task;
+    }
+
+    private static BiConsumer<Collection<Result>, Throwable> propagateResultsTo(CompletableBatchWriteFuture stage) {
+        return (r, e) -> {
+            if (e == null) {
+                stage.complete(r);
+            } else {
+                stage.completeExceptionally(e);
+            }
+        };
     }
 
     private void obeyRateLimit(long permits) {
@@ -297,100 +341,59 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
                 TimeUnit.SECONDS, new LinkedBlockingQueue<>(), tf, new AbortPolicy());
     }
 
-    private static <T> ConditionalWriteFuture submit(AsyncConditionalWriter writer, CompletableFuture<T> stage, ConditionalMutation cm) {
-        CompletableFuture<Result> f = stage.thenCompose(result -> {
-            try {
-                return writer.submit(cm);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new CompletionException(e);
-            }
-        });
-        return new ConditionalWriteFutureImpl(writer, f);
+    interface WriteFuture extends Future<Result>, WriteStage {
+
+        @Override
+        WriteFuture thenSubmit(ConditionalMutation cm);
+
+        @Override
+        WriteFuture thenSubmit(ConditionalMutation cm, long timeout, TimeUnit unit);
+
+        @Override
+        WriteFuture thenTrySubmit(ConditionalMutation cm);
+
+        @Override
+        BatchWriteFuture thenSubmit(Collection<ConditionalMutation> cm);
+
+        @Override
+        BatchWriteFuture thenSubmit(Collection<ConditionalMutation> cm, long timeout, TimeUnit unit);
+
+        @Override
+        BatchWriteFuture thenTrySubmit(Collection<ConditionalMutation> cm);
+
     }
 
-    private static <T> ConditionalWriteFuture submit(AsyncConditionalWriter writer, CompletableFuture<T> stage, ConditionalMutation cm, long timeout, TimeUnit unit) {
-        CompletableFuture<Result> f = stage.thenCompose(result -> {
-            try {
-                return writer.submit(cm, timeout, unit);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new CompletionException(e);
-            }
-        });
-        return new ConditionalWriteFutureImpl(writer, f);
+    interface BatchWriteFuture extends Future<Collection<Result>>, BatchWriteStage {
+
+        @Override
+        WriteFuture thenSubmit(ConditionalMutation cm);
+
+        @Override
+        WriteFuture thenSubmit(ConditionalMutation cm, long timeout, TimeUnit unit);
+
+        @Override
+        WriteFuture thenTrySubmit(ConditionalMutation cm);
+
+        @Override
+        BatchWriteFuture thenSubmit(Collection<ConditionalMutation> cm);
+
+        @Override
+        BatchWriteFuture thenSubmit(Collection<ConditionalMutation> cm, long timeout, TimeUnit unit);
+
+        @Override
+        BatchWriteFuture thenTrySubmit(Collection<ConditionalMutation> cm);
+
     }
 
-    private static <T> ConditionalWriteFuture trySubmit(AsyncConditionalWriter writer, CompletableFuture<T> stage, ConditionalMutation cm) {
-        return new ConditionalWriteFutureImpl(writer, stage.thenCompose(result -> writer.trySubmit(cm)));
-    }
-
-    private static <T> ConditionalBatchWriteFuture submitMany(AsyncConditionalWriter writer, CompletableFuture<T> stage, Collection<ConditionalMutation> mutations) {
-        CompletableFuture<Collection<Result>> f = stage.thenCompose(result -> {
-            try {
-                return writer.submitMany(mutations);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new CompletionException(e);
-            }
-        });
-        return new ConditionalBatchWriteFutureImpl(writer, f);
-    }
-
-    private static <T> ConditionalBatchWriteFuture submitMany(AsyncConditionalWriter writer, CompletableFuture<T> stage, Collection<ConditionalMutation> mutations, long timeout, TimeUnit unit) {
-        CompletableFuture<Collection<Result>> f = stage.thenCompose(result -> {
-            try {
-                return writer.submitMany(mutations, timeout, unit);
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new CompletionException(e);
-            }
-        });
-        return new ConditionalBatchWriteFutureImpl(writer, f);
-    }
-
-    private static <T> ConditionalBatchWriteFuture trySubmitMany(AsyncConditionalWriter writer, CompletableFuture<T> stage, Collection<ConditionalMutation> mutations) {
-        return new ConditionalBatchWriteFutureImpl(writer, stage.thenCompose(result -> writer.trySubmitMany(mutations)));
-    }
-
-    private final class CompleteOneTask extends CompletableFuture<Result> implements ConditionalWriteFuture {
+    private final class CompleteOneTask extends CompletableWriteFuture implements WriteFuture {
 
         private Iterator<Result> resultIter;
         private final long permits;
 
-        CompleteOneTask(Iterator<ConditionalWriter.Result> resultIter, long permits) {
+        CompleteOneTask(Iterator<Result> resultIter, long permits) {
+            super(AsyncConditionalWriterImpl.this);
             this.resultIter = resultIter;
             this.permits = permits;
-        }
-
-        @Override
-        public ConditionalWriteFuture thenSubmit(ConditionalMutation cm) {
-            return submit(AsyncConditionalWriterImpl.this, this, cm);
-        }
-
-        @Override
-        public ConditionalWriteFuture thenSubmit(ConditionalMutation cm, long timeout, TimeUnit unit) {
-            return submit(AsyncConditionalWriterImpl.this, this, cm, timeout, unit);
-        }
-
-        @Override
-        public ConditionalWriteFuture thenTrySubmit(ConditionalMutation cm) {
-            return trySubmit(AsyncConditionalWriterImpl.this, this, cm);
-        }
-
-        @Override
-        public ConditionalBatchWriteFuture thenSubmit(Collection<ConditionalMutation> cm) {
-            return submitMany(AsyncConditionalWriterImpl.this, this, cm);
-        }
-
-        @Override
-        public ConditionalBatchWriteFuture thenSubmit(Collection<ConditionalMutation> cm, long timeout, TimeUnit unit) {
-            return submitMany(AsyncConditionalWriterImpl.this, this, cm, timeout, unit);
-        }
-
-        @Override
-        public ConditionalBatchWriteFuture thenTrySubmit(Collection<ConditionalMutation> cm) {
-            return trySubmitMany(AsyncConditionalWriterImpl.this, this, cm);
         }
 
         Runnable task() {
@@ -417,49 +420,20 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
 
     }
 
-    private final class CompleteManyTask extends CompletableFuture<Collection<Result>> implements ConditionalBatchWriteFuture  {
+    private final class CompleteManyTask extends CompletableBatchWriteFuture implements BatchWriteFuture {
 
         private Iterator<ConditionalWriter.Result> resultIter;
         private final int count;
         private final long permits;
 
-        CompleteManyTask(Iterator<ConditionalWriter.Result> resultIter, int count, long permits) {
+        CompleteManyTask(Iterator<Result> resultIter, int count, long permits) {
+            super(AsyncConditionalWriterImpl.this);
             this.resultIter = resultIter;
             this.count = count;
             this.permits = permits;
         }
 
-        @Override
-        public ConditionalWriteFuture thenSubmit(ConditionalMutation cm) {
-            return submit(AsyncConditionalWriterImpl.this, this, cm);
-        }
-
-        @Override
-        public ConditionalWriteFuture thenSubmit(ConditionalMutation cm, long timeout, TimeUnit unit) {
-            return submit(AsyncConditionalWriterImpl.this, this, cm, timeout, unit);
-        }
-
-        @Override
-        public ConditionalWriteFuture thenTrySubmit(ConditionalMutation cm) {
-            return trySubmit(AsyncConditionalWriterImpl.this, this, cm);
-        }
-
-        @Override
-        public ConditionalBatchWriteFuture thenSubmit(Collection<ConditionalMutation> cm) {
-            return submitMany(AsyncConditionalWriterImpl.this, this, cm);
-        }
-
-        @Override
-        public ConditionalBatchWriteFuture thenSubmit(Collection<ConditionalMutation> cm, long timeout, TimeUnit unit) {
-            return submitMany(AsyncConditionalWriterImpl.this, this, cm, timeout, unit);
-        }
-
-        @Override
-        public ConditionalBatchWriteFuture thenTrySubmit(Collection<ConditionalMutation> cm) {
-            return trySubmitMany(AsyncConditionalWriterImpl.this, this, cm);
-        }
-
-        public Runnable task() {
+        Runnable task() {
             return () -> {
                 try {
                     complete(getResults());
@@ -491,102 +465,120 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
 
     }
 
-    private static final class ConditionalWriteFutureImpl extends ForwardingCompletableFuture<Result> implements ConditionalWriteFuture {
+    private static class CompletableWriteFuture extends CompletableFuture<Result> implements WriteFuture {
 
         private final AsyncConditionalWriter writer;
-        private final CompletableFuture<Result> delegate;
 
-        ConditionalWriteFutureImpl(AsyncConditionalWriter writer, CompletableFuture<Result> delegete) {
-            super(delegete);
+        CompletableWriteFuture(AsyncConditionalWriter writer) {
             this.writer = writer;
-            this.delegate = delegete;
         }
 
         @Override
-        public ConditionalWriteFuture thenSubmit(ConditionalMutation cm) {
-            return submit(writer, delegate, cm);
+        public WriteFuture thenSubmit(ConditionalMutation cm) {
+            return thenSubmit(result -> writer.submit(cm));
         }
 
         @Override
-        public ConditionalWriteFuture thenSubmit(ConditionalMutation cm, long timeout, TimeUnit unit) {
-            return submit(writer, delegate, cm, timeout, unit);
+        public WriteFuture thenSubmit(ConditionalMutation cm, long timeout, TimeUnit unit) {
+            return thenSubmit(result -> writer.submit(cm, timeout, unit));
         }
 
         @Override
-        public ConditionalWriteFuture thenTrySubmit(ConditionalMutation cm) {
-            return trySubmit(writer, delegate, cm);
+        public WriteFuture thenTrySubmit(ConditionalMutation cm) {
+            return thenSubmit(result -> writer.trySubmit(cm));
+        }
+
+        private WriteFuture thenSubmit(InterruptibleFunction<Result, WriteStage> submitter) {
+            CompletableWriteFuture composed = new CompletableWriteFuture(writer);
+            thenCompose(propagateInterrupt(submitter)).whenCompleteAsync(propagateResultTo(composed));
+            return composed;
         }
 
         @Override
-        public ConditionalBatchWriteFuture thenSubmit(Collection<ConditionalMutation> cm) {
-            return submitMany(writer, delegate, cm);
+        public BatchWriteFuture thenSubmit(Collection<ConditionalMutation> cm) {
+            return thenSubmitMany(result -> writer.submitMany(cm));
         }
 
         @Override
-        public ConditionalBatchWriteFuture thenSubmit(Collection<ConditionalMutation> cm, long timeout, TimeUnit unit) {
-            return submitMany(writer, delegate, cm, timeout, unit);
+        public BatchWriteFuture thenSubmit(Collection<ConditionalMutation> cm, long timeout, TimeUnit unit) {
+            return thenSubmitMany(result -> writer.submitMany(cm, timeout, unit));
         }
 
         @Override
-        public ConditionalBatchWriteFuture thenTrySubmit(Collection<ConditionalMutation> cm) {
-            return trySubmitMany(writer, delegate, cm);
+        public BatchWriteFuture thenTrySubmit(Collection<ConditionalMutation> cm) {
+            return thenSubmitMany(result -> writer.trySubmitMany(cm));
+        }
+
+        private BatchWriteFuture thenSubmitMany(InterruptibleFunction<Result, BatchWriteStage> submitter) {
+            CompletableBatchWriteFuture composed = new CompletableBatchWriteFuture(writer);
+            thenCompose(propagateInterrupt(submitter)).whenCompleteAsync(propagateResultsTo(composed));
+            return composed;
         }
 
     }
 
-    private static final class ConditionalBatchWriteFutureImpl extends ForwardingCompletableFuture<Collection<Result>> implements ConditionalBatchWriteFuture {
+    private static class CompletableBatchWriteFuture extends CompletableFuture<Collection<Result>> implements BatchWriteFuture {
 
         private final AsyncConditionalWriter writer;
-        private final CompletableFuture<Collection<Result>> delegate;
 
-        ConditionalBatchWriteFutureImpl(AsyncConditionalWriter writer, CompletableFuture<Collection<Result>> delegete) {
-            super(delegete);
+        CompletableBatchWriteFuture(AsyncConditionalWriter writer) {
             this.writer = writer;
-            this.delegate = delegete;
         }
 
         @Override
-        public ConditionalWriteFuture thenSubmit(ConditionalMutation cm) {
-            return submit(writer, delegate, cm);
+        public WriteFuture thenSubmit(ConditionalMutation cm) {
+            return thenSubmit(result -> writer.submit(cm));
         }
 
         @Override
-        public ConditionalWriteFuture thenSubmit(ConditionalMutation cm, long timeout, TimeUnit unit) {
-            return submit(writer, delegate, cm, timeout, unit);
+        public WriteFuture thenSubmit(ConditionalMutation cm, long timeout, TimeUnit unit) {
+            return thenSubmit(result -> writer.submit(cm, timeout, unit));
         }
 
         @Override
-        public ConditionalWriteFuture thenTrySubmit(ConditionalMutation cm) {
-            return trySubmit(writer, delegate, cm);
+        public WriteFuture thenTrySubmit(ConditionalMutation cm) {
+            return thenSubmit(result -> writer.trySubmit(cm));
+        }
+
+        private WriteFuture thenSubmit(InterruptibleFunction<Collection<Result>, WriteStage> submitter) {
+            CompletableWriteFuture composed = new CompletableWriteFuture(writer);
+            thenCompose(propagateInterrupt(submitter)).whenCompleteAsync(propagateResultTo(composed));
+            return composed;
         }
 
         @Override
-        public ConditionalBatchWriteFuture thenSubmit(Collection<ConditionalMutation> cm) {
-            return submitMany(writer, delegate, cm);
+        public BatchWriteFuture thenSubmit(Collection<ConditionalMutation> cm) {
+            return thenSubmitMany(result -> writer.submitMany(cm));
         }
 
         @Override
-        public ConditionalBatchWriteFuture thenSubmit(Collection<ConditionalMutation> cm, long timeout, TimeUnit unit) {
-            return submitMany(writer, delegate, cm, timeout, unit);
+        public BatchWriteFuture thenSubmit(Collection<ConditionalMutation> cm, long timeout, TimeUnit unit) {
+            return thenSubmitMany(result -> writer.submitMany(cm, timeout, unit));
         }
 
         @Override
-        public ConditionalBatchWriteFuture thenTrySubmit(Collection<ConditionalMutation> cm) {
-            return trySubmitMany(writer, delegate, cm);
+        public BatchWriteFuture thenTrySubmit(Collection<ConditionalMutation> cm) {
+            return thenSubmitMany(result -> writer.trySubmitMany(cm));
+        }
+
+        private BatchWriteFuture thenSubmitMany(InterruptibleFunction<Collection<Result>, BatchWriteStage> submitter) {
+            CompletableBatchWriteFuture composed = new CompletableBatchWriteFuture(writer);
+            thenCompose(propagateInterrupt(submitter)).whenCompleteAsync(propagateResultsTo(composed));
+            return composed;
         }
 
     }
 
-    private ConditionalWriteFuture failedConditionalWriteFuture(Throwable t) {
-        CompletableFuture<Result> f = new CompletableFuture<>();
+    private WriteFuture failedConditionalWriteFuture(Throwable t) {
+        CompletableWriteFuture f = new CompletableWriteFuture(this);
         f.completeExceptionally(t);
-        return new ConditionalWriteFutureImpl(this, f);
+        return f;
     }
 
-    private ConditionalBatchWriteFuture failedConditionalBatchWriteFuture(Throwable t) {
-        CompletableFuture<Collection<Result>> f = new CompletableFuture<>();
+    private BatchWriteFuture failedConditionalBatchWriteFuture(Throwable t) {
+        CompletableBatchWriteFuture f = new CompletableBatchWriteFuture(this);
         f.completeExceptionally(t);
-        return new ConditionalBatchWriteFutureImpl(this, f);
+        return f;
     }
 
 }

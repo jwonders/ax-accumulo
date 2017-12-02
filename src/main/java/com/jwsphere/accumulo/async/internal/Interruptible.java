@@ -84,7 +84,7 @@ public class Interruptible {
                 return function.apply(arg);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
-                throw new RuntimeException(e);
+                throw new CompletionException(e);
             }
         };
     }
