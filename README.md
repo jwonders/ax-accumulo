@@ -96,3 +96,31 @@ in a very memory-efficient way to avoid aforementioned problems.
 ``` java
 axWriter.await();
 ```
+
+### Failure Policy
+
+A conditional write operation can return with several status codes.  Since
+an exception is not raised for statuses such as `REJECTED`, or `UNKNOWN`,
+the write stages will complete normally.  Often applications need to handle 
+these cases differently and in some cases it is most natural to treat these
+statuses as an exceptional completion so any downstream composed stages are
+skipped.
+
+A `FailurePolicy` allows the application to configure when a status is 
+considered normal or exceptional.  By default, the failure policy of a
+writer considers every status normal.
+
+A common case is to only consider the `ACCEPTED` status a normal completion
+and deal with special cases as part of exceptional completion handlers.  A
+writer can be configured with such a failure policy in which case all writes
+will complete normally only if their result status is `ACCEPTED`.
+
+``` java
+AsyncConditionalWriter axWriter = axConnector.createConditionalWriter("table", config)
+    .withFailurePolicy(FailurePolicy.failUnlessAccepted());
+```
+
+The failure policy can be customized as needed.  Any writers derived from
+an existing writer through `withRateLimit` will inherit the failure policy.
+Similarly when configuring a failure policy, the returned writer will share
+the rate limiter.
