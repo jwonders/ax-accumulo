@@ -541,7 +541,10 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
         FutureMutation submit(FutureMutation mutation) throws InterruptedException {
             ensureNotShutdown();
             mutation.acquire();
-            queue.offer(mutation);
+            boolean added = queue.offer(mutation);
+            if (!added) {
+                mutation.completeExceptionally(new RuntimeException());
+            }
             return mutation;
         }
 
@@ -551,7 +554,10 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
             if (!acquired) {
                 mutation.completeExceptionally(SUBMISSION_TIMEOUT);
             }
-            queue.offer(mutation);
+            boolean added = queue.offer(mutation);
+            if (!added) {
+                mutation.completeExceptionally(new RuntimeException());
+            }
             return mutation;
         }
 
@@ -561,7 +567,10 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
             if (!acquired) {
                 mutation.completeExceptionally(SUBMISSION_TIMEOUT);
             }
-            queue.offer(mutation);
+            boolean added = queue.offer(mutation);
+            if (!added) {
+                mutation.completeExceptionally(new RuntimeException());
+            }
             return mutation;
         }
 
