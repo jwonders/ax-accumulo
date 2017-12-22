@@ -4,6 +4,7 @@ import org.apache.accumulo.core.data.Mutation;
 
 import java.util.Collection;
 import java.util.concurrent.CompletionStage;
+import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -25,16 +26,24 @@ public interface AsyncBatchWriter extends AutoCloseable, Awaitable {
      */
     WriteStage submit(Mutation mutation) throws InterruptedException;
 
+    WriteStage submitAsync(Mutation mutation, Executor executor);
+
     /**
      * Asynchronously inserts a mutation into the table.
      */
     WriteStage submit(Mutation mutation, long timeout, TimeUnit unit) throws InterruptedException;
 
+    WriteStage submitAsync(Mutation mutation, Executor executor, long timeout, TimeUnit unit);
+
     WriteStage trySubmit(Mutation mutation);
 
-    WriteStage submit(Collection<Mutation> mutations) throws InterruptedException;
+    WriteStage submitMany(Collection<Mutation> mutations) throws InterruptedException;
+
+    WriteStage submitManyAsync(Collection<Mutation> mutations, Executor executor);
 
     WriteStage submitMany(Collection<Mutation> mutations, long timeout, TimeUnit unit) throws InterruptedException;
+
+    WriteStage submitManyAsync(Collection<Mutation> mutations, Executor executor, long timeout, TimeUnit unit);
 
     WriteStage trySubmitMany(Collection<Mutation> mutations);
 
@@ -54,15 +63,23 @@ public interface AsyncBatchWriter extends AutoCloseable, Awaitable {
 
         WriteStage thenSubmit(Mutation mutation);
 
+        WriteStage thenSubmitAsync(Mutation mutation, Executor executor);
+
         WriteStage thenSubmit(Mutation mutation, long timeout, TimeUnit unit);
+
+        WriteStage thenSubmitAsync(Mutation mutation, Executor executor, long timeout, TimeUnit unit);
 
         WriteStage thenTrySubmit(Mutation mutation);
 
-        WriteStage thenSubmit(Collection<Mutation> mutations);
+        WriteStage thenSubmitMany(Collection<Mutation> mutations);
 
-        WriteStage thenSubmit(Collection<Mutation> mutations, long timeout, TimeUnit unit);
+        WriteStage thenSubmitManyAsync(Collection<Mutation> mutations, Executor executor);
 
-        WriteStage thenTrySubmit(Collection<Mutation> mutations);
+        WriteStage thenSubmitMany(Collection<Mutation> mutations, long timeout, TimeUnit unit);
+
+        WriteStage thenSubmitManyAsync(Collection<Mutation> mutations, Executor executor, long timeout, TimeUnit unit);
+
+        WriteStage thenTrySubmitMany(Collection<Mutation> mutations);
 
     }
 

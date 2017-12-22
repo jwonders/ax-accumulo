@@ -2,10 +2,14 @@ package com.jwsphere.accumulo.async;
 
 import com.jwsphere.accumulo.async.internal.AsyncConditionalWriterImpl;
 import com.jwsphere.accumulo.async.internal.AsyncMultiTableBatchWriterImpl;
+import com.jwsphere.accumulo.async.internal.ScanBuilderImpl;
 import org.apache.accumulo.core.client.BatchWriterConfig;
 import org.apache.accumulo.core.client.ConditionalWriter;
 import org.apache.accumulo.core.client.Connector;
+import org.apache.accumulo.core.client.IteratorSetting.Column;
+import org.apache.accumulo.core.client.Scanner;
 import org.apache.accumulo.core.client.TableNotFoundException;
+import org.apache.accumulo.core.security.Authorizations;
 
 import java.util.concurrent.Executor;
 import java.util.concurrent.ForkJoinPool;
@@ -49,6 +53,10 @@ public class AsyncConnector {
 
     public AsyncMultiTableBatchWriter createMultiTableBatchWriter(BatchWriterConfig config) {
         return new AsyncMultiTableBatchWriterImpl(() -> connector.createMultiTableBatchWriter(config));
+    }
+
+    public ScanBuilder createScanBuilder(String table) {
+        return new ScanBuilderImpl(connector, table);
     }
 
     public static AsyncConnector wrap(Connector connector) {

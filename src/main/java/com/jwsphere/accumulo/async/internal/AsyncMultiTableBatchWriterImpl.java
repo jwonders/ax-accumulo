@@ -2,10 +2,10 @@ package com.jwsphere.accumulo.async.internal;
 
 import com.google.common.util.concurrent.RateLimiter;
 import com.jwsphere.accumulo.async.AsyncBatchWriter;
-import com.jwsphere.accumulo.async.AsyncBatchWriter.WriteStage;
 import com.jwsphere.accumulo.async.AsyncMultiTableBatchWriter;
 import com.jwsphere.accumulo.async.MutationWriteStage;
 import com.jwsphere.accumulo.async.SubmissionTimeoutException;
+import com.jwsphere.accumulo.async.internal.Interruptible.InterruptibleFunction;
 import org.HdrHistogram.Histogram;
 import org.apache.accumulo.core.client.AccumuloException;
 import org.apache.accumulo.core.client.AccumuloSecurityException;
@@ -27,6 +27,7 @@ import java.util.List;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Executor;
 import java.util.concurrent.ExecutorService;
@@ -35,9 +36,11 @@ import java.util.concurrent.Future;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import static com.jwsphere.accumulo.async.internal.Interruptible.propagateInterrupt;
+import static com.jwsphere.accumulo.async.internal.MoreCompletableFutures.propagateResultTo;
 
 /**
  * @author Jonathan Wonders
@@ -82,7 +85,8 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
     @Override
     public MutationWriteStage submitAsync(String table, Mutation mutation, Executor executor) {
-        return null;
+        Supplier<MutationWriteStage> submitTask = Interruptible.supplier(() -> submit(table, mutation));
+        return asWriteFuture(CompletableFuture.supplyAsync(submitTask, executor).thenCompose(Function.identity()));
     }
 
     @Override
@@ -92,7 +96,8 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
     @Override
     public MutationWriteStage submitAsync(String table, Mutation mutation, Executor executor, long timeout, TimeUnit unit) {
-        throw new UnsupportedOperationException("TODO");
+        Supplier<MutationWriteStage> submitTask = Interruptible.supplier(() -> submit(table, mutation, timeout, unit));
+        return asWriteFuture(CompletableFuture.supplyAsync(submitTask, executor).thenCompose(Function.identity()));
     }
 
     @Override
@@ -107,7 +112,8 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
     @Override
     public MutationWriteStage submitManyAsync(String table, Collection<Mutation> mutations, Executor executor) {
-        throw new UnsupportedOperationException("TODO");
+        Supplier<MutationWriteStage> submitTask = Interruptible.supplier(() -> submitMany(table, mutations));
+        return asWriteFuture(CompletableFuture.supplyAsync(submitTask, executor).thenCompose(Function.identity()));
     }
 
     @Override
@@ -117,7 +123,8 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
     @Override
     public MutationWriteStage submitManyAsync(String table, Collection<Mutation> mutations, Executor executor, long timeout, TimeUnit unit) {
-        throw new UnsupportedOperationException("TODO");
+        Supplier<MutationWriteStage> submitTask = Interruptible.supplier(() -> submitMany(table, mutations, timeout, unit));
+        return asWriteFuture(CompletableFuture.supplyAsync(submitTask, executor).thenCompose(Function.identity()));
     }
 
     @Override
@@ -136,13 +143,13 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
     @Override
     public void await() throws InterruptedException {
-        flushTask.submit(new Await()).join();
+        flushTask.submit(new Await(this)).join();
     }
 
     @Override
     public boolean await(long timeout, TimeUnit unit) throws InterruptedException {
         try {
-            flushTask.submit(new Await()).get(timeout, unit);
+            flushTask.submit(new Await(this)).get(timeout, unit);
             return true;
         } catch (ExecutionException e) {
             throw new CompletionException(e);
@@ -165,6 +172,12 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
         executorService.shutdownNow();
     }
 
+    private CompletableMutationWriteFuture asWriteFuture(CompletionStage<Void> stage) {
+        CompletableMutationWriteFuture future = new CompletableMutationWriteFuture(this);
+        stage.whenComplete(propagateResultTo(future));
+        return future;
+    }
+
     private FutureMutation createMutation(String table, Mutation mutation) {
         return new FutureSingleMutation(this, table, mutation, capacityLimit);
     }
@@ -173,71 +186,14 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
         return new FutureMutationBatch(this, table, mutation, capacityLimit);
     }
 
-    class TableSpecificStage extends CompletableFuture<Void> implements AsyncBatchWriter.WriteStage {
-
-        private final String table;
-        private final MutationWriteStage stage;
-
-        TableSpecificStage(String table, MutationWriteStage stage) {
-            this.table = table;
-            this.stage = stage;
-
-        }
-
-        @Override
-        public WriteStage thenSubmit(Mutation mutation) {
-            return propagateCompletion(stage.thenSubmit(table, mutation));
-        }
-
-        @Override
-        public WriteStage thenSubmit(Mutation mutation, long timeout, TimeUnit unit) {
-            return propagateCompletion(stage.thenSubmit(table, mutation, timeout, unit));
-        }
-
-        @Override
-        public WriteStage thenTrySubmit(Mutation mutation) {
-            return propagateCompletion(stage.thenTrySubmit(table, mutation));
-        }
-
-        @Override
-        public WriteStage thenSubmit(Collection<Mutation> mutations) {
-            return propagateCompletion(stage.thenSubmit(table, mutations));
-        }
-
-        @Override
-        public WriteStage thenSubmit(Collection<Mutation> mutations, long timeout, TimeUnit unit) {
-            return propagateCompletion(stage.thenSubmit(table, mutations, timeout, unit));
-        }
-
-        @Override
-        public WriteStage thenTrySubmit(Collection<Mutation> mutations) {
-            return propagateCompletion(stage.thenTrySubmit(table, mutations));
-        }
-
-        private WriteStage propagateCompletion(MutationWriteStage nextStage) {
-            TableSpecificStage wrapped = new TableSpecificStage(table, nextStage);
-            nextStage.whenComplete((x, t) -> {
-                if (t == null) {
-                    wrapped.complete(x);
-                } else {
-                    wrapped.completeExceptionally(t);
-                }
-            });
-            return wrapped;
-        }
-
-    }
-
     class AsyncBatchWriterImpl implements AsyncBatchWriter {
 
-        private final String table;
         private final WriterStrategy strategy;
         private final CompletionBarrier barrier;
 
         AsyncBatchWriterImpl(String table) throws AccumuloException, AccumuloSecurityException, TableNotFoundException {
             MultiTableBatchWriter writer = AsyncMultiTableBatchWriterImpl.this.writer;
             BatchWriter bw = writer.getBatchWriter(table);
-            this.table = table;
             this.strategy = new SingleTableWriterStrategy(writer, bw, table);
             this.barrier = new CompletionBarrier();
         }
@@ -248,8 +204,20 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
         }
 
         @Override
+        public WriteStage submitAsync(Mutation mutation, Executor executor) {
+            Supplier<WriteStage> submitTask = Interruptible.supplier(() -> submit(mutation));
+            return asWriteFuture(CompletableFuture.supplyAsync(submitTask, executor).thenCompose(Function.identity()));
+        }
+
+        @Override
         public WriteStage submit(Mutation mutation, long timeout, TimeUnit unit) throws InterruptedException {
             return propagateCompletionThenTrack(flushTask.submit(createMutation(mutation), timeout, unit));
+        }
+
+        @Override
+        public WriteStage submitAsync(Mutation mutation, Executor executor, long timeout, TimeUnit unit) {
+            Supplier<WriteStage> submitTask = Interruptible.supplier(() -> submit(mutation, timeout, unit));
+            return asWriteFuture(CompletableFuture.supplyAsync(submitTask, executor).thenCompose(Function.identity()));
         }
 
         @Override
@@ -258,13 +226,19 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
         }
 
         private FutureSingleMutation createMutation(Mutation mutation) {
-            AsyncMultiTableBatchWriter writer = AsyncMultiTableBatchWriterImpl.this;
+            AsyncMultiTableBatchWriterImpl writer = AsyncMultiTableBatchWriterImpl.this;
             return new FutureSingleMutation(writer, strategy, mutation, capacityLimit);
         }
 
         @Override
-        public WriteStage submit(Collection<Mutation> mutations) throws InterruptedException {
+        public WriteStage submitMany(Collection<Mutation> mutations) throws InterruptedException {
             return propagateCompletionThenTrack(flushTask.submit(createMutation(mutations)));
+        }
+
+        @Override
+        public WriteStage submitManyAsync(Collection<Mutation> mutations, Executor executor) {
+            Supplier<WriteStage> submitTask = Interruptible.supplier(() -> submitMany(mutations));
+            return asWriteFuture(CompletableFuture.supplyAsync(submitTask, executor).thenCompose(Function.identity()));
         }
 
         @Override
@@ -273,12 +247,24 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
         }
 
         @Override
+        public WriteStage submitManyAsync(Collection<Mutation> mutations, Executor executor, long timeout, TimeUnit unit) {
+            Supplier<WriteStage> submitTask = Interruptible.supplier(() -> submitMany(mutations, timeout, unit));
+            return asWriteFuture(CompletableFuture.supplyAsync(submitTask, executor).thenCompose(Function.identity()));
+        }
+
+        @Override
         public WriteStage trySubmitMany(Collection<Mutation> mutations) {
             return propagateCompletionThenTrack(flushTask.trySubmit(createMutation(mutations)));
         }
 
+        private TableSpecificWriteFuture asWriteFuture(CompletionStage<Void> stage) {
+            CompletableTableSpecificWriteFuture future = new CompletableTableSpecificWriteFuture(this);
+            stage.whenComplete(propagateResultTo(future));
+            return future;
+        }
+
         private FutureMutationBatch createMutation(Collection<Mutation> mutations) {
-            AsyncMultiTableBatchWriter writer = AsyncMultiTableBatchWriterImpl.this;
+            AsyncMultiTableBatchWriterImpl writer = AsyncMultiTableBatchWriterImpl.this;
             return new FutureMutationBatch(writer, strategy, mutations, capacityLimit);
         }
 
@@ -298,26 +284,18 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
         }
 
         private WriteStage propagateCompletionThenTrack(MutationWriteStage stage) {
-            WriteStage wrapped = propagateCompletion(stage);
+            WriteStage wrapped = asWriteFuture(stage);
             barrier.submit(wrapped);
-            return wrapped;
-        }
-
-        private WriteStage propagateCompletion(MutationWriteStage nextStage) {
-            TableSpecificStage wrapped = new TableSpecificStage(table, nextStage);
-            nextStage.whenComplete((x, t) -> {
-                if (t == null) {
-                    wrapped.complete(x);
-                } else {
-                    wrapped.completeExceptionally(t);
-                }
-            });
             return wrapped;
         }
 
     }
 
-    private static abstract class FutureMutation extends CompletableFuture<Void> implements MutationWriteFuture {
+    private static abstract class FutureMutation extends CompletableMutationWriteFuture {
+
+        FutureMutation(AsyncMultiTableBatchWriterImpl writer) {
+            super(writer);
+        }
 
         abstract long size();
 
@@ -351,7 +329,8 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
         private final long permits;
         private LongSemaphore capacityLimit;
 
-        CapacityLimitedFutureMutation(long permits, LongSemaphore capacityLimit) {
+        CapacityLimitedFutureMutation(AsyncMultiTableBatchWriterImpl writer, long permits, LongSemaphore capacityLimit) {
+            super(writer);
             this.permits = permits;
             this.capacityLimit = capacityLimit;
         }
@@ -442,49 +421,17 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
     private static final class FutureSingleMutation extends CapacityLimitedFutureMutation {
 
-        private final AsyncMultiTableBatchWriter writer;
         private final WriterStrategy strategy;
         private final Mutation mutation;
 
-        FutureSingleMutation(AsyncMultiTableBatchWriter writer, String table, Mutation mutation, LongSemaphore capacityLimit) {
+        FutureSingleMutation(AsyncMultiTableBatchWriterImpl writer, String table, Mutation mutation, LongSemaphore capacityLimit) {
             this(writer, new MultiTableWriterStrategy(table), mutation, capacityLimit);
         }
 
-        FutureSingleMutation(AsyncMultiTableBatchWriter writer, WriterStrategy strategy, Mutation mutation, LongSemaphore capacityLimit) {
-            super(mutation.estimatedMemoryUsed(), capacityLimit);
-            this.writer = writer;
+        FutureSingleMutation(AsyncMultiTableBatchWriterImpl writer, WriterStrategy strategy, Mutation mutation, LongSemaphore capacityLimit) {
+            super(writer, mutation.estimatedMemoryUsed(), capacityLimit);
             this.strategy = strategy;
             this.mutation = mutation;
-        }
-
-        @Override
-        public MutationWriteStage thenSubmit(String table, Mutation mutation) {
-            return submitTo(writer, this, table, mutation);
-        }
-
-        @Override
-        public MutationWriteStage thenSubmit(String table, Mutation mutation, long timeout, TimeUnit unit) {
-            return submitTo(writer, this, table, mutation, timeout, unit);
-        }
-
-        @Override
-        public MutationWriteStage thenTrySubmit(String table, Mutation mutation) {
-            return trySubmitTo(writer, this, table, mutation);
-        }
-
-        @Override
-        public MutationWriteStage thenSubmit(String table, Collection<Mutation> mutations) {
-            return submitManyTo(writer, this, table, mutations);
-        }
-
-        @Override
-        public MutationWriteStage thenSubmit(String table, Collection<Mutation> mutations, long timeout, TimeUnit unit) {
-            return submitManyTo(writer, this, table, mutations, timeout, unit);
-        }
-
-        @Override
-        public MutationWriteStage thenTrySubmit(String table, Collection<Mutation> mutations) {
-            return trySubmitManyTo(writer, this, table, mutations);
         }
 
         @Override
@@ -500,49 +447,17 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
     private static final class FutureMutationBatch extends CapacityLimitedFutureMutation {
 
-        private final AsyncMultiTableBatchWriter writer;
         private final WriterStrategy strategy;
         private final Collection<Mutation> mutations;
 
-        FutureMutationBatch(AsyncMultiTableBatchWriter writer, String table, Collection<Mutation> mutations, LongSemaphore capacityLimit) {
+        FutureMutationBatch(AsyncMultiTableBatchWriterImpl writer, String table, Collection<Mutation> mutations, LongSemaphore capacityLimit) {
             this(writer, new MultiTableWriterStrategy(table), mutations, capacityLimit);
         }
 
-        FutureMutationBatch(AsyncMultiTableBatchWriter writer, WriterStrategy strategy, Collection<Mutation> mutations, LongSemaphore capacityLimit) {
-            super(computePermits(mutations), capacityLimit);
-            this.writer = writer;
+        FutureMutationBatch(AsyncMultiTableBatchWriterImpl writer, WriterStrategy strategy, Collection<Mutation> mutations, LongSemaphore capacityLimit) {
+            super(writer, computePermits(mutations), capacityLimit);
             this.strategy = strategy;
             this.mutations = mutations;
-        }
-
-        @Override
-        public MutationWriteStage thenSubmit(String table, Mutation mutation) {
-            return submitTo(writer, this, table, mutation);
-        }
-
-        @Override
-        public MutationWriteStage thenSubmit(String table, Mutation mutation, long timeout, TimeUnit unit) {
-            return submitTo(writer, this, table, mutation, timeout, unit);
-        }
-
-        @Override
-        public MutationWriteStage thenTrySubmit(String table, Mutation mutation) {
-            return trySubmitTo(writer, this, table, mutation);
-        }
-
-        @Override
-        public MutationWriteStage thenSubmit(String table, Collection<Mutation> mutations) {
-            return submitManyTo(writer, this, table, mutations);
-        }
-
-        @Override
-        public MutationWriteStage thenSubmit(String table, Collection<Mutation> mutations, long timeout, TimeUnit unit) {
-            return submitManyTo(writer, this, table, mutations, timeout, unit);
-        }
-
-        @Override
-        public MutationWriteStage thenTrySubmit(String table, Collection<Mutation> mutations) {
-            return trySubmitManyTo(writer, this, table, mutations);
         }
 
         @Override
@@ -566,6 +481,10 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
     private static final class Await extends FutureMutation {
 
+        Await(AsyncMultiTableBatchWriterImpl writer) {
+            super(writer);
+        }
+
         @Override
         long size() {
             return 0L;
@@ -578,36 +497,6 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
         @Override
         boolean acquire(long timeout, TimeUnit unit) throws InterruptedException {
             return true;
-        }
-
-        @Override
-        public MutationWriteStage thenSubmit(String table, Mutation mutation) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public MutationWriteStage thenSubmit(String table, Mutation mutation, long timeout, TimeUnit unit) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public MutationWriteStage thenTrySubmit(String table, Mutation mutation) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public MutationWriteStage thenSubmit(String table, Collection<Mutation> mutations) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public MutationWriteStage thenSubmit(String table, Collection<Mutation> mutations, long timeout, TimeUnit unit) {
-            throw new UnsupportedOperationException();
-        }
-
-        @Override
-        public MutationWriteStage thenTrySubmit(String table, Collection<Mutation> mutations) {
-            throw new UnsupportedOperationException();
         }
 
         @Override
@@ -811,88 +700,180 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
     }
 
-    private static final class MutationWriteFutureImpl extends ForwardingCompletableFuture<Void> implements MutationWriteFuture {
-
-        private final AsyncMultiTableBatchWriter writer;
-        private final CompletableFuture<Void> delegate;
-
-        MutationWriteFutureImpl(AsyncMultiTableBatchWriter writer, CompletableFuture<Void> delegate) {
-            super(delegate);
-            this.writer = writer;
-            this.delegate = delegate;
-        }
-
-        @Override
-        public MutationWriteStage thenSubmit(String table, Mutation mutation) {
-            return submitTo(writer, delegate, table, mutation);
-        }
-
-        @Override
-        public MutationWriteStage thenSubmit(String table, Mutation mutation, long timeout, TimeUnit unit) {
-            return submitTo(writer, delegate, table, mutation, timeout, unit);
-        }
-
-        @Override
-        public MutationWriteStage thenTrySubmit(String table, Mutation mutation) {
-            return trySubmitTo(writer, delegate, table, mutation);
-        }
-
-        @Override
-        public MutationWriteStage thenSubmit(String table, Collection<Mutation> mutations) {
-            return submitManyTo(writer, delegate, table, mutations);
-        }
-
-        @Override
-        public MutationWriteStage thenSubmit(String table, Collection<Mutation> mutations, long timeout, TimeUnit unit) {
-            return submitManyTo(writer, delegate, table, mutations, timeout, unit);
-        }
-
-        @Override
-        public MutationWriteStage thenTrySubmit(String table, Collection<Mutation> mutations) {
-            return trySubmitManyTo(writer, delegate, table, mutations);
-        }
-
-    }
-
-    private static MutationWriteFuture submitTo(AsyncMultiTableBatchWriter writer, CompletableFuture<Void> stage,
-                                                String table, Mutation mutation) {
-        CompletableFuture<Void> f = stage.thenCompose(propagateInterrupt(result -> writer.submit(table, mutation)));
-        return new MutationWriteFutureImpl(writer, f);
-    }
-
-    private static MutationWriteFuture submitTo(AsyncMultiTableBatchWriter writer, CompletableFuture<Void> stage,
-                                                String table, Mutation mutation, long timeout, TimeUnit unit) {
-        CompletableFuture<Void> f = stage.thenCompose(
-                propagateInterrupt(result -> writer.submit(table, mutation, timeout, unit)));
-        return new MutationWriteFutureImpl(writer, f);
-    }
-
-    private static MutationWriteFuture trySubmitTo(AsyncMultiTableBatchWriter writer, CompletableFuture<Void> stage,
-                                                   String table, Mutation mutation) {
-        return new MutationWriteFutureImpl(writer, stage.thenCompose(result -> writer.trySubmit(table, mutation)));
-    }
-
-    private static MutationWriteFuture submitManyTo(AsyncMultiTableBatchWriter writer, CompletableFuture<Void> stage,
-                                                    String table, Collection<Mutation> mutations) {
-        CompletableFuture<Void> f = stage.thenCompose(
-                propagateInterrupt(result -> writer.submitMany(table, mutations)));
-        return new MutationWriteFutureImpl(writer, f);
-    }
-
-    private static MutationWriteFuture submitManyTo(AsyncMultiTableBatchWriter writer, CompletableFuture<Void> stage,
-                                                    String table, Collection<Mutation> mutations, long timeout, TimeUnit unit) {
-        CompletableFuture<Void> f = stage.thenCompose(
-                propagateInterrupt(result -> writer.submitMany(table, mutations, timeout, unit)));
-        return new MutationWriteFutureImpl(writer, f);
-    }
-
-    private static MutationWriteFuture trySubmitManyTo(AsyncMultiTableBatchWriter writer, CompletableFuture<Void> stage,
-                                                       String table, Collection<Mutation> mutations) {
-        return new MutationWriteFutureImpl(writer, stage.thenCompose(result -> writer.trySubmitMany(table, mutations)));
-    }
-
-
     public interface MutationWriteFuture extends Future<Void>, MutationWriteStage {
+
+        MutationWriteFuture thenSubmit(String table, Mutation mutation);
+
+        MutationWriteFuture thenSubmitAsync(String table, Mutation mutation, Executor executor);
+
+        MutationWriteFuture thenSubmit(String table, Mutation mutation, long timeout, TimeUnit unit);
+
+        MutationWriteFuture thenSubmitAsync(String table, Mutation mutation, Executor executor, long timeout, TimeUnit unit);
+
+        MutationWriteFuture thenTrySubmit(String table, Mutation mutation);
+
+        MutationWriteFuture thenSubmitMany(String table, Collection<Mutation> mutations);
+
+        MutationWriteFuture thenSubmitManyAsync(String table, Collection<Mutation> mutations, Executor executor);
+
+        MutationWriteFuture thenSubmitMany(String table, Collection<Mutation> mutations, long timeout, TimeUnit unit);
+
+        MutationWriteFuture thenSubmitManyAsync(String table, Collection<Mutation> mutations, Executor executor, long timeout, TimeUnit unit);
+
+        MutationWriteFuture thenTrySubmitMany(String table, Collection<Mutation> mutations);
+
+    }
+
+    private static class CompletableMutationWriteFuture extends CompletableFuture<Void> implements MutationWriteFuture {
+
+        private final AsyncMultiTableBatchWriterImpl writer;
+
+        CompletableMutationWriteFuture(AsyncMultiTableBatchWriterImpl writer) {
+            this.writer = writer;
+        }
+
+        @Override
+        public MutationWriteFuture thenSubmit(String table, Mutation mutation) {
+            return thenSubmit(result -> writer.submit(table, mutation));
+        }
+
+        @Override
+        public MutationWriteFuture thenSubmitAsync(String table, Mutation mutation, Executor executor) {
+            return thenSubmit(result -> writer.submitAsync(table, mutation, executor));
+        }
+
+        @Override
+        public MutationWriteFuture thenSubmit(String table, Mutation mutation, long timeout, TimeUnit unit) {
+            return thenSubmit(result -> writer.submit(table, mutation, timeout, unit));
+        }
+
+        @Override
+        public MutationWriteFuture thenSubmitAsync(String table, Mutation mutation, Executor executor, long timeout, TimeUnit unit) {
+            return thenSubmit(result -> writer.submitAsync(table, mutation, executor, timeout, unit));
+        }
+
+        @Override
+        public MutationWriteFuture thenTrySubmit(String table, Mutation mutation) {
+            return thenSubmit(result -> writer.trySubmit(table, mutation));
+        }
+
+        @Override
+        public MutationWriteFuture thenSubmitMany(String table, Collection<Mutation> mutations) {
+            return thenSubmit(result -> writer.submitMany(table, mutations));
+        }
+
+        @Override
+        public MutationWriteFuture thenSubmitManyAsync(String table, Collection<Mutation> mutations, Executor executor) {
+            return thenSubmit(result -> writer.submitManyAsync(table, mutations, executor));
+        }
+
+        @Override
+        public MutationWriteFuture thenSubmitMany(String table, Collection<Mutation> mutations, long timeout, TimeUnit unit) {
+            return thenSubmit(result -> writer.submitMany(table, mutations, timeout, unit));
+        }
+
+        @Override
+        public MutationWriteFuture thenSubmitManyAsync(String table, Collection<Mutation> mutations, Executor executor, long timeout, TimeUnit unit) {
+            return thenSubmit(result -> writer.submitManyAsync(table, mutations, executor, timeout, unit));
+        }
+
+        @Override
+        public MutationWriteFuture thenTrySubmitMany(String table, Collection<Mutation> mutations) {
+            return thenSubmit(result -> writer.trySubmitMany(table, mutations));
+        }
+
+        private MutationWriteFuture thenSubmit(InterruptibleFunction<Void, MutationWriteStage> submitter) {
+            return writer.asWriteFuture(super.thenCompose(propagateInterrupt(submitter)));
+        }
+
+    }
+
+    public interface TableSpecificWriteFuture extends Future<Void>, AsyncBatchWriter.WriteStage {
+
+        TableSpecificWriteFuture thenSubmit(Mutation mutation);
+
+        TableSpecificWriteFuture thenSubmitAsync(Mutation mutation, Executor executor);
+
+        TableSpecificWriteFuture thenSubmit(Mutation mutation, long timeout, TimeUnit unit);
+
+        TableSpecificWriteFuture thenSubmitAsync(Mutation mutation, Executor executor, long timeout, TimeUnit unit);
+
+        TableSpecificWriteFuture thenTrySubmit(Mutation mutation);
+
+        TableSpecificWriteFuture thenSubmitMany(Collection<Mutation> mutations);
+
+        TableSpecificWriteFuture thenSubmitManyAsync(Collection<Mutation> mutations, Executor executor);
+
+        TableSpecificWriteFuture thenSubmitMany(Collection<Mutation> mutations, long timeout, TimeUnit unit);
+
+        TableSpecificWriteFuture thenSubmitManyAsync(Collection<Mutation> mutations, Executor executor, long timeout, TimeUnit unit);
+
+        TableSpecificWriteFuture thenTrySubmitMany(Collection<Mutation> mutations);
+
+    }
+
+    private static class CompletableTableSpecificWriteFuture extends CompletableFuture<Void> implements TableSpecificWriteFuture {
+
+        private final AsyncBatchWriterImpl writer;
+
+        CompletableTableSpecificWriteFuture(AsyncBatchWriterImpl writer) {
+            this.writer = writer;
+        }
+
+        @Override
+        public TableSpecificWriteFuture thenSubmit(Mutation mutation) {
+            return thenSubmit(result -> writer.submit(mutation));
+        }
+
+        @Override
+        public TableSpecificWriteFuture thenSubmitAsync(Mutation mutation, Executor executor) {
+            return thenSubmit(result -> writer.submitAsync(mutation, executor));
+        }
+
+        @Override
+        public TableSpecificWriteFuture thenSubmit(Mutation mutation, long timeout, TimeUnit unit) {
+            return thenSubmit(result -> writer.submit(mutation, timeout, unit));
+        }
+
+        @Override
+        public TableSpecificWriteFuture thenSubmitAsync(Mutation mutation, Executor executor, long timeout, TimeUnit unit) {
+            return thenSubmit(result -> writer.submitAsync(mutation, executor, timeout, unit));
+        }
+
+        @Override
+        public TableSpecificWriteFuture thenTrySubmit(Mutation mutation) {
+            return thenSubmit(result -> writer.trySubmit(mutation));
+        }
+
+        @Override
+        public TableSpecificWriteFuture thenSubmitMany(Collection<Mutation> mutations) {
+            return thenSubmit(result -> writer.submitMany(mutations));
+        }
+
+        @Override
+        public TableSpecificWriteFuture thenSubmitManyAsync(Collection<Mutation> mutations, Executor executor) {
+            return thenSubmit(result -> writer.submitManyAsync(mutations, executor));
+        }
+
+        @Override
+        public TableSpecificWriteFuture thenSubmitMany(Collection<Mutation> mutations, long timeout, TimeUnit unit) {
+            return thenSubmit(result -> writer.submitMany(mutations, timeout, unit));
+        }
+
+        @Override
+        public TableSpecificWriteFuture thenSubmitManyAsync(Collection<Mutation> mutations, Executor executor, long timeout, TimeUnit unit) {
+            return thenSubmit(result -> writer.submitManyAsync(mutations, executor, timeout, unit));
+        }
+
+        @Override
+        public TableSpecificWriteFuture thenTrySubmitMany(Collection<Mutation> mutations) {
+            return thenSubmit(result -> writer.trySubmitMany(mutations));
+        }
+
+        private TableSpecificWriteFuture thenSubmit(InterruptibleFunction<Void, AsyncBatchWriter.WriteStage> submitter) {
+            return writer.asWriteFuture(super.thenCompose(propagateInterrupt(submitter)));
+        }
+
     }
 
 }

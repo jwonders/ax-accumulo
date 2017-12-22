@@ -4,25 +4,42 @@ import com.jwsphere.accumulo.async.AccumuloParameterResolver;
 import com.jwsphere.accumulo.async.AccumuloProvider;
 import com.jwsphere.accumulo.async.AsyncConditionalWriter;
 import com.jwsphere.accumulo.async.AsyncConditionalWriter.SingleWriteStage;
+import com.jwsphere.accumulo.async.AsyncConditionalWriter.WriteStage;
 import com.jwsphere.accumulo.async.AsyncConditionalWriterConfig;
 import com.jwsphere.accumulo.async.AsyncConnector;
+import com.jwsphere.accumulo.async.AsyncScanner;
+import com.jwsphere.accumulo.async.CollectingScanObserver;
+import com.jwsphere.accumulo.async.FailurePolicy;
+import com.jwsphere.accumulo.async.ResultException;
+import org.apache.accumulo.core.client.AccumuloException;
+import org.apache.accumulo.core.client.AccumuloSecurityException;
 import org.apache.accumulo.core.client.ConditionalWriter.Result;
 import org.apache.accumulo.core.client.ConditionalWriter.Status;
 import org.apache.accumulo.core.client.Connector;
 import org.apache.accumulo.core.client.ZooKeeperInstance;
 import org.apache.accumulo.core.data.Condition;
 import org.apache.accumulo.core.data.ConditionalMutation;
+import org.apache.accumulo.core.data.Key;
+import org.apache.accumulo.core.data.Range;
+import org.apache.accumulo.core.data.Value;
+import org.apache.log4j.Logger;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 
+import java.util.Map.Entry;
+import java.util.SortedSet;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Function;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
+import static java.util.concurrent.CompletableFuture.completedFuture;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -30,6 +47,8 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @ExtendWith(AccumuloParameterResolver.class)
 public class AsyncConditionalWriterImplTest {
+
+    private static final Logger LOG = Logger.getLogger(AsyncConditionalWriterImplTest.class);
 
     private static AccumuloProvider accumulo;
     private static Connector connector;
@@ -63,6 +82,40 @@ public class AsyncConditionalWriterImplTest {
 
             Result result = op.toCompletableFuture().get();
             assertEquals(Status.ACCEPTED, result.getStatus());
+        }
+    }
+
+    @Test
+    public void testRejectOne() throws Exception {
+        AsyncConditionalWriterConfig config = AsyncConditionalWriterConfig.create();
+        try (AsyncConditionalWriter writer = asyncConnector.createConditionalWriter("table", config)) {
+            ConditionalMutation cm = new ConditionalMutation("reject one");
+            cm.addCondition(new Condition("cf", "cq").setValue(new byte[0]));
+
+            CompletionStage<Result> op = writer.submit(cm);
+
+            Result result = op.toCompletableFuture().get();
+            assertEquals(Status.REJECTED, result.getStatus());
+        }
+    }
+
+    @Test
+    public void testRejectFirst() throws Exception {
+        AsyncConditionalWriterConfig config = AsyncConditionalWriterConfig.create();
+        try (AsyncConditionalWriter writer = asyncConnector.createConditionalWriter("table", config)
+                .withFailurePolicy(FailurePolicy.failUnlessAccepted())) {
+
+            ConditionalMutation cm = new ConditionalMutation("put_one");
+            cm.addCondition(new Condition("cf", "cq").setValue(new byte[0]));
+
+            ConditionalMutation cm2 = new ConditionalMutation("put_one");
+            cm2.addCondition(new Condition("cf", "cq"));
+
+            WriteStage<Result> first = writer.submit(cm);
+            WriteStage<Result> second = first.thenSubmit(cm2);
+
+            assertThrows(Exception.class, first.toCompletableFuture()::get);
+            assertThrows(Exception.class, second.toCompletableFuture()::get);
         }
     }
 
@@ -190,6 +243,109 @@ public class AsyncConditionalWriterImplTest {
             CompletionStage<Result> op = writer.trySubmit(cm);
             assertTrue(op.toCompletableFuture().isCompletedExceptionally());
 
+        }
+    }
+
+    @Test
+    public void testRetry() throws Exception {
+
+        AsyncConditionalWriterConfig config = AsyncConditionalWriterConfig.create()
+                .withLimitedMemoryCapacity(2048);
+
+        try (AsyncConditionalWriter writer = asyncConnector.createConditionalWriter("table", config)) {
+
+            byte[] payload = new byte[768];
+
+            ConditionalMutation someOtherMutation = new ConditionalMutation("red_herring");
+            someOtherMutation.addCondition(new Condition("cf", "cq"));
+            someOtherMutation.put("cf".getBytes(UTF_8), "cq".getBytes(UTF_8), payload);
+
+            ConditionalMutation cm = new ConditionalMutation("immediately_fail_exceeding_capacity");
+            cm.addCondition(new Condition("cf", "cq"));
+            cm.put("cf".getBytes(UTF_8), "cq".getBytes(UTF_8), payload);
+
+            // write a mutation, but pretend we wrote the other one, got a result of UNKNOWN,
+            // and that the mutation was not actually written
+            WriteStage<Result> op = writer.submit(someOtherMutation)
+                    .thenApply(x -> new Result(Status.UNKNOWN, cm, "server"))
+                    .thenComposeSubmit((result, acw) -> {
+                        switch (getStatusUnchecked(result)) {
+                            // any non-exceptional completion continues down the nominal path
+                            // the only way to short-circuit over downstream composed stages is exceptional completion
+                            // otherwise some data needs to be passed along with the completed value that each stage
+                            // uses to make a decision of whether or not to do any work
+                            case ACCEPTED:
+                                return acw.asSingleStage(completedFuture(result));
+                            case UNKNOWN:
+                                return new RetryWorkflow(acw, cm).scanAndMaybeRetry(result);
+                            default:
+                                return acw.asSingleStage(MoreCompletableFutures.immediatelyFailed(new ResultException(result)));
+                        }
+                    });
+
+            assertEquals(Status.ACCEPTED, op.toCompletableFuture().get().getStatus());
+        }
+    }
+
+    private static class RetryWorkflow {
+
+        private final AsyncConditionalWriter writer;
+        private final ConditionalMutation cm;
+
+        RetryWorkflow(AsyncConditionalWriter writer, ConditionalMutation cm) {
+            this.writer = writer;
+            this.cm = cm;
+        }
+
+        private CompletableFuture<SortedSet<Entry<Key, Value>>> scan() {
+            AsyncScanner scanner = asyncConnector.createScanBuilder("table")
+                    .range(Range.exact("immediately_fail_exceeding_capacity"))
+                    .build();
+            CollectingScanObserver scanOperation = new CollectingScanObserver();
+            scanner.scanOn(scanOperation, ForkJoinPool.commonPool());
+            return scanOperation;
+        }
+
+        private SingleWriteStage scanAndMaybeRetry(Result result) {
+            return writer.asSingleStage(scan().thenCompose(maybeRetry(result)));
+        }
+
+        private Function<SortedSet<Entry<Key, Value>>, CompletionStage<Result>> maybeRetry(Result result) {
+            return entries -> {
+                boolean wasAccepted = checkWasAccepted(entries);
+                boolean wouldBeRejected = checkWouldBeRejected(entries);
+                if (!wasAccepted && !wouldBeRejected) {
+                    try {
+                        return writer.submit(cm);
+                    } catch (InterruptedException e) {
+                        Thread.currentThread().interrupt();
+                        throw new CompletionException(e);
+                    }
+                } else if (wasAccepted) {
+                    return completedFuture(new Result(Status.ACCEPTED, result.getMutation(), result.getTabletServer()));
+                } else {
+                    return completedFuture(new Result(Status.REJECTED, result.getMutation(), result.getTabletServer()));
+                }
+            };
+        }
+
+        private boolean checkWouldBeRejected(SortedSet<Entry<Key, Value>> entries) {
+            // maybe there was a write collision or race condition with another writer
+            return !entries.isEmpty();
+        }
+
+        private boolean checkWasAccepted(SortedSet<Entry<Key, Value>> entries) {
+            // in reality should check for columns that determine if the mutation was accepted
+            return !entries.isEmpty();
+        }
+
+    }
+
+    private static Status getStatusUnchecked(Result result) {
+        try {
+            return result.getStatus();
+        } catch (AccumuloException | AccumuloSecurityException e) {
+            throw new CompletionException(e);
         }
     }
 

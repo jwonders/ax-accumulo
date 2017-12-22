@@ -8,33 +8,44 @@ import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BiConsumer;
+import java.util.function.BiFunction;
+import java.util.function.Function;
 
 /**
- * <p>
  * A conditional writer that supports asynchronous writes and non-blocking
  * interaction.  This paradigm is well suited for applications that perform
  * many independent writes, especially when there are different contexts
  * associated with each individual write.
- * </p>
  *
  * <p>
  * A web service that might serve many users concurrently is a motivating example.
- * </p>
  *
  * <p>
  * Another goal is to simplify the implementation of multi-mutation transactions
  * by providing a clear API for scheduling dependent mutations to be written
  * sequentially while allowing independent mutations to be written concurrently.
- * </p>
+ *
+ * <p>
+ * The caller can provide a {@link FailurePolicy} to instruct the writer whether
+ * to complete normally or exceptionally depending on the status of the result.
+ * For batch write operations, if any operation has a status that would result in
+ * exceptional completion, the operation is completed exceptionally.
  *
  * @author Jonathan Wonders
  */
 public interface AsyncConditionalWriter extends AutoCloseable, Awaitable {
 
     /**
-     * Submits a mutation for asynchronous insertion into the table.  This method
-     * will return following submission, and may block when there is insufficient
-     * capacity to accept the mutation.
+     * Submits a mutation for asynchronous insertion into the table.
+     *
+     * <p>
+     * This method will return following submission, and may block when there is
+     * insufficient capacity to accept the mutation.
+     *
+     * <p>
+     * The writer will abide by a {@link FailurePolicy} to determine whether
+     * the result implies normal completion or exception completion.
      *
      * @return A completion stage for the insert.  Successful completion entails
      * the mutation has been committed to the table.  Exceptional completion
@@ -43,9 +54,15 @@ public interface AsyncConditionalWriter extends AutoCloseable, Awaitable {
     SingleWriteStage submit(ConditionalMutation cm) throws InterruptedException;
 
     /**
-     * Submits a mutation for asynchronous insertion into the table.  This method
-     * will return immediately as submission is performed asynchronously via the
-     * provided executor.
+     * Submits a mutation for asynchronous insertion into the table.
+     *
+     * <p>
+     * This method will return immediately as submission is performed asynchronously
+     * on the provided executor.
+     *
+     * <p>
+     * The writer will abide by a {@link FailurePolicy} to determine whether
+     * the result implies normal completion or exception completion.
      *
      * @return A completion stage for the insert.  Successful completion entails
      * the mutation has been committed to the table.  Exceptional completion
@@ -54,11 +71,20 @@ public interface AsyncConditionalWriter extends AutoCloseable, Awaitable {
     SingleWriteStage submitAsync(ConditionalMutation cm, Executor executor);
 
     /**
-     * Submits a mutation for asynchronous insertion into the table.  This method
-     * will return following submission, and may block when there is insufficient
-     * capacity to accept the mutation.  If there is insufficient capacity and
-     * the provided timeout elapses, the submission will be cancelled and the
-     * resulting completion stage will exhibit a {@link CancellationException}.
+     * Submits a mutation for asynchronous insertion into the table.
+     *
+     * <p>
+     * This method will return following submission, and may block when there is
+     * insufficient capacity to accept the mutation.
+     *
+     * <p>
+     * If there is insufficient capacity and the requested timeout elapses, the
+     * submission will be cancelled and the resulting completion stage will
+     * be completed exceptionally with a {@link CancellationException}.
+     *
+     * <p>
+     * The writer will abide by a {@link FailurePolicy} to determine whether
+     * the result implies normal completion or exception completion.
      *
      * @return A completion stage for the insert.  Successful completion entails
      * the mutation has been committed to the table.  Exceptional completion
@@ -67,11 +93,20 @@ public interface AsyncConditionalWriter extends AutoCloseable, Awaitable {
     SingleWriteStage submit(ConditionalMutation cm, long timeout, TimeUnit unit) throws InterruptedException;
 
     /**
-     * Submits a mutation for asynchronous insertion into the table.  This method
-     * will return immediately as submission is performed asynchronously via the
-     * provided executor.  If there is insufficient capacity and the requested
-     * timeout elapses, the submission will be cancelled and the resulting
-     * completion stage will exhibit a {@link CancellationException}.
+     * Submits a mutation for asynchronous insertion into the table.
+     *
+     * <p>
+     * This method will return immediately following submission, and may block
+     * when there is insufficient capacity to accept the mutation.
+     *
+     * <p>
+     * If there is insufficient capacity and the requested timeout elapses, the
+     * submission will be cancelled and the resulting completion stage will
+     * be completed exceptionally with a {@link CancellationException}.
+     *
+     * <p>
+     * The writer will abide by a {@link FailurePolicy} to determine whether
+     * the result implies normal completion or exception completion.
      *
      * @return A completion stage for the insert.  Successful completion entails
      * the mutation has been committed to the table.  Exceptional completion
@@ -81,9 +116,15 @@ public interface AsyncConditionalWriter extends AutoCloseable, Awaitable {
 
     /**
      * Attempts to submit a mutation for insertion into the table.  This method
-     * will always return immediately.  If there was insufficient capacity to
-     * submit the mutation, the submission will be cancelled and the completion
-     * stage will exhibit a {@link CancellationException}.
+     * will always return immediately.
+     *
+     * <p>
+     * If there was insufficient capacity to submit the mutation, the submission will be
+     * cancelled and the completion stage will exhibit a {@link CancellationException}.
+     *
+     * <p>
+     * The writer will abide by a {@link FailurePolicy} to determine whether
+     * the result implies normal completion or exception completion.
      *
      * @return A completion stage for the insert.  Successful completion entails
      * that the mutation has been applied to the table with the configured durability.
@@ -91,12 +132,15 @@ public interface AsyncConditionalWriter extends AutoCloseable, Awaitable {
     SingleWriteStage trySubmit(ConditionalMutation cm);
 
     /**
-     * Submits a collection of mutations for insertion into the table.  This
-     * method will return immediately after submission, but may block when
-     * there is insufficient capacity to accept the mutations.  If there is
-     * insufficient capacity and the requested timeout elapses, the submission
-     * will be cancelled and the resulting completion stage will exhibit a
-     * {@link CancellationException}.
+     * Submits a collection of mutations for insertion into the table.
+     *
+     * <p>
+     * This method will return following submission, and may block when there is
+     * insufficient capacity to accept the mutation.
+     *
+     * <p>
+     * The writer will abide by a {@link FailurePolicy} to determine whether
+     * the result implies normal completion or exception completion.
      *
      * @return A completion stage for the insert.  The mutations are tracked
      * collectively such that only when all complete, will the completion stage
@@ -105,9 +149,32 @@ public interface AsyncConditionalWriter extends AutoCloseable, Awaitable {
     BatchWriteStage submitMany(Collection<ConditionalMutation> mutations) throws InterruptedException;
 
     /**
-     * Submits a collection of mutations for insertion into the table.  This
-     * method will return immediately after submission, but may block when
+     * Submits a collection of mutations for insertion into the table.
+     *
+     * <p>
+     * This method will return immediately as submission is performed asynchronously
+     * on the provided executor.
+     *
+     * <p>
+     * The writer will abide by a {@link FailurePolicy} to determine whether
+     * the result implies normal completion or exception completion.
+     *
+     * @return A completion stage for the insert.  The mutations are tracked
+     * collectively such that only when all complete, will the completion stage
+     * exhibit a result.
+     */
+    BatchWriteStage submitManyAsync(Collection<ConditionalMutation> mutations, Executor executor) throws InterruptedException;
+
+    /**
+     * Submits a collection of mutations for insertion into the table.
+     *
+     * <p>
+     * This method will return immediately after submission, but may block when
      * there is insufficient capacity to accept the mutations.
+     *
+     * <p>
+     * The writer will abide by a {@link FailurePolicy} to determine whether
+     * the result implies normal completion or exception completion.
      *
      * @return A completion stage for the insert.  The mutations are tracked
      * collectively such that only when all complete, will the completion stage
@@ -116,10 +183,34 @@ public interface AsyncConditionalWriter extends AutoCloseable, Awaitable {
     BatchWriteStage submitMany(Collection<ConditionalMutation> mutations, long timeout, TimeUnit unit) throws InterruptedException;
 
     /**
+     * Submits a collection of mutations for insertion into the table.
+     *
+     * <p>
+     * This method will return immediately as submission is performed asynchronously
+     * on the provided executor.
+     *
+     * <p>
+     * If there is insufficient capacity and the requested timeout elapses, the
+     * submission will be cancelled and the resulting completion stage will
+     * be completed exceptionally with a {@link CancellationException}.
+     *
+     * <p>
+     * The writer will abide by a {@link FailurePolicy} to determine whether
+     * the result implies normal completion or exception completion.
+     *
+     * @return A completion stage for the insert.  The mutations are tracked
+     * collectively such that only when all complete, will the completion stage
+     * exhibit a result.
+     */
+    BatchWriteStage submitManyAsync(Collection<ConditionalMutation> mutations, Executor executor, long timeout, TimeUnit unit) throws InterruptedException;
+
+    /**
      * Attempts to submit a collection of mutations for insertion into the table.
-     * This method will return immediately.  If there was insufficient capacity to
-     * submit the mutations, the submission will be cancelled and the completion
-     * stage will exhibit a {@link CancellationException}.
+     * This method will return immediately.
+     *
+     * <p>
+     * If there was insufficient capacity to submit the mutations, the submission will be
+     * cancelled and the completion stage will exhibit a {@link CancellationException}.
      *
      * @return A completion stage for the insert.  The mutations are tracked
      * collectively such that only when all complete, will the completion stage
@@ -127,10 +218,22 @@ public interface AsyncConditionalWriter extends AutoCloseable, Awaitable {
      */
     BatchWriteStage trySubmitMany(Collection<ConditionalMutation> mutations);
 
+    SingleWriteStage asSingleStage(CompletionStage<Result> stage);
+
+    BatchWriteStage asBatchStage(CompletionStage<Collection<Result>> stage);
+
+    <U> WriteStage<U> asWriteStage(CompletionStage<U> future);
+
     /**
      * Creates a rate limited conditional writer.
      */
     AsyncConditionalWriter withRateLimit(double bytesPerSecond);
+
+    /**
+     * Creates a conditional writer that abides by the given failure policy.
+     * This conditional writer will share this writers rate limit.
+     */
+    AsyncConditionalWriter withFailurePolicy(FailurePolicy policy);
 
     /**
      * Waits until previously submitted mutations have completed.  A mutation is
@@ -205,15 +308,61 @@ public interface AsyncConditionalWriter extends AutoCloseable, Awaitable {
          */
         SingleWriteStage thenSubmit(ConditionalMutation cm);
 
+        SingleWriteStage thenSubmitAsync(ConditionalMutation cm, Executor executor);
+
         SingleWriteStage thenSubmit(ConditionalMutation cm, long timeout, TimeUnit unit);
+
+        SingleWriteStage thenSubmitAsync(ConditionalMutation cm, Executor executor, long timeout, TimeUnit unit);
 
         SingleWriteStage thenTrySubmit(ConditionalMutation cm);
 
-        BatchWriteStage thenSubmit(Collection<ConditionalMutation> cm);
+        BatchWriteStage thenSubmitMany(Collection<ConditionalMutation> cm);
 
-        BatchWriteStage thenSubmit(Collection<ConditionalMutation> cm, long timeout, TimeUnit unit);
+        BatchWriteStage thenSubmitManyAsync(Collection<ConditionalMutation> cm, Executor executor);
+
+        BatchWriteStage thenSubmitMany(Collection<ConditionalMutation> cm, long timeout, TimeUnit unit);
+
+        BatchWriteStage thenSubmitManyAsync(Collection<ConditionalMutation> cm, Executor executor, long timeout, TimeUnit unit);
 
         BatchWriteStage thenTrySubmit(Collection<ConditionalMutation> cm);
+
+        <U> WriteStage<U> thenComposeSubmit(BiFunction<T, AsyncConditionalWriter, CompletionStage<U>> fn);
+
+        @Override
+        <U> WriteStage<U> handle(BiFunction<? super T, Throwable, ? extends U> fn);
+
+        @Override
+        <U> WriteStage<U> handleAsync(BiFunction<? super T, Throwable, ? extends U> fn);
+
+        @Override
+        <U> WriteStage<U> handleAsync(BiFunction<? super T, Throwable, ? extends U> fn, Executor executor);
+
+        @Override
+        <U> WriteStage<U> thenApply(Function<? super T, ? extends U> fn);
+
+        @Override
+        <U> WriteStage<U> thenApplyAsync(Function<? super T, ? extends U> fn);
+
+        @Override
+        <U> WriteStage<U> thenApplyAsync(Function<? super T, ? extends U> fn, Executor executor);
+
+        @Override
+        <U> WriteStage<U> thenCompose(Function<? super T, ? extends CompletionStage<U>> fn);
+
+        @Override
+        <U> WriteStage<U> thenComposeAsync(Function<? super T, ? extends CompletionStage<U>> fn);
+
+        @Override
+        <U> WriteStage<U> thenComposeAsync(Function<? super T, ? extends CompletionStage<U>> fn, Executor executor);
+
+        @Override
+        WriteStage<T> whenComplete(BiConsumer<? super T, ? super Throwable> action);
+
+        @Override
+        WriteStage<T> whenCompleteAsync(BiConsumer<? super T, ? super Throwable> action);
+
+        @Override
+        WriteStage<T> whenCompleteAsync(BiConsumer<? super T, ? super Throwable> action, Executor executor);
 
     }
 
