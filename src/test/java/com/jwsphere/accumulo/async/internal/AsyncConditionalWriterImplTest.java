@@ -38,6 +38,7 @@ import java.util.concurrent.ForkJoinPool;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
+import static com.jwsphere.accumulo.async.internal.MoreCompletableFutures.immediatelyFailed;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.concurrent.CompletableFuture.completedFuture;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -279,7 +280,7 @@ public class AsyncConditionalWriterImplTest {
                             case UNKNOWN:
                                 return new RetryWorkflow(acw, cm).scanAndMaybeRetry(result);
                             default:
-                                return acw.asSingleStage(MoreCompletableFutures.immediatelyFailed(new ResultException(result)));
+                                return acw.asSingleStage(immediatelyFailed(new ResultException(result)));
                         }
                     });
 

@@ -4,6 +4,7 @@ import org.apache.accumulo.core.data.Mutation;
 
 import java.util.Collection;
 import java.util.concurrent.CancellationException;
+import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 
@@ -22,7 +23,7 @@ public interface AsyncMultiTableBatchWriter extends AutoCloseable, Awaitable {
      * @return A completion stage for the insert.  Successful completion entails
      * that the mutation has been applied to the table with the configured durability.
      */
-    MutationWriteStage submit(String table, Mutation mutation) throws InterruptedException;
+    WriteStage submit(String table, Mutation mutation) throws InterruptedException;
 
     /**
      * Submits a mutation for insertion into the table.  This method will return
@@ -32,7 +33,7 @@ public interface AsyncMultiTableBatchWriter extends AutoCloseable, Awaitable {
      * @return A completion stage for the insert.  Successful completion entails
      * that the mutation has been applied to the table with the configured durability.
      */
-    MutationWriteStage submitAsync(String table, Mutation mutation, Executor executor);
+    WriteStage submitAsync(String table, Mutation mutation, Executor executor);
 
     /**
      * Submits a mutation for insertion into the table.  This method will return
@@ -44,7 +45,7 @@ public interface AsyncMultiTableBatchWriter extends AutoCloseable, Awaitable {
      * @return A completion stage for the insert.  Successful completion entails
      * that the mutation has been applied to the table with the configured durability.
      */
-    MutationWriteStage submit(String table, Mutation mutation, long timeout, TimeUnit unit) throws InterruptedException;
+    WriteStage submit(String table, Mutation mutation, long timeout, TimeUnit unit) throws InterruptedException;
 
     /**
      * Submits a mutation for insertion into the table.  This method will return
@@ -56,7 +57,7 @@ public interface AsyncMultiTableBatchWriter extends AutoCloseable, Awaitable {
      * @return A completion stage for the insert.  Successful completion entails
      * that the mutation has been applied to the table with the configured durability.
      */
-    MutationWriteStage submitAsync(String table, Mutation mutation, Executor executor, long timeout, TimeUnit unit);
+    WriteStage submitAsync(String table, Mutation mutation, Executor executor, long timeout, TimeUnit unit);
 
     /**
      * Attempts to submit a mutation for insertion into the table.  This method
@@ -67,7 +68,7 @@ public interface AsyncMultiTableBatchWriter extends AutoCloseable, Awaitable {
      * @return A completion stage for the insert.  Successful completion entails
      * that the mutation has been applied to the table with the configured durability.
      */
-    MutationWriteStage trySubmit(String table, Mutation mutation);
+    WriteStage trySubmit(String table, Mutation mutation);
 
     /**
      * Submits a collection of mutations for insertion into the table.  This
@@ -81,9 +82,9 @@ public interface AsyncMultiTableBatchWriter extends AutoCloseable, Awaitable {
      * collectively such that only when all complete, will the completion stage
      * exhibit a result.
      */
-    MutationWriteStage submitMany(String table, Collection<Mutation> mutations) throws InterruptedException;
+    WriteStage submitMany(String table, Collection<Mutation> mutations) throws InterruptedException;
 
-    MutationWriteStage submitManyAsync(String table, Collection<Mutation> mutations, Executor executor);
+    WriteStage submitManyAsync(String table, Collection<Mutation> mutations, Executor executor);
 
     /**
      * Submits a collection of mutations for insertion into the table.  This
@@ -94,9 +95,9 @@ public interface AsyncMultiTableBatchWriter extends AutoCloseable, Awaitable {
      * collectively such that only when all complete, will the completion stage
      * exhibit a result.
      */
-    MutationWriteStage submitMany(String table, Collection<Mutation> mutations, long timeout, TimeUnit unit) throws InterruptedException;
+    WriteStage submitMany(String table, Collection<Mutation> mutations, long timeout, TimeUnit unit) throws InterruptedException;
 
-    MutationWriteStage submitManyAsync(String table, Collection<Mutation> mutations, Executor executor, long timeout, TimeUnit unit);
+    WriteStage submitManyAsync(String table, Collection<Mutation> mutations, Executor executor, long timeout, TimeUnit unit);
 
     /**
      * Attempts to submit a collection of mutations for insertion into the table.
@@ -108,7 +109,7 @@ public interface AsyncMultiTableBatchWriter extends AutoCloseable, Awaitable {
      * collectively such that only when all complete, will the completion stage
      * exhibit a result.
      */
-    MutationWriteStage trySubmitMany(String table, Collection<Mutation> mutations);
+    WriteStage trySubmitMany(String table, Collection<Mutation> mutations);
 
     AsyncBatchWriter getBatchWriter(String table);
 
@@ -134,5 +135,29 @@ public interface AsyncMultiTableBatchWriter extends AutoCloseable, Awaitable {
      * mutations has stopped and prior to calling close.
      */
     void close();
+
+    interface WriteStage extends CompletionStage<Void> {
+
+        WriteStage thenSubmit(String table, Mutation mutation);
+
+        WriteStage thenSubmitAsync(String table, Mutation mutation, Executor executor);
+
+        WriteStage thenSubmit(String table, Mutation mutation, long timeout, TimeUnit unit);
+
+        WriteStage thenSubmitAsync(String table, Mutation mutation, Executor executor, long timeout, TimeUnit unit);
+
+        WriteStage thenTrySubmit(String table, Mutation mutation);
+
+        WriteStage thenSubmitMany(String table, Collection<Mutation> mutations);
+
+        WriteStage thenSubmitManyAsync(String table, Collection<Mutation> mutations, Executor executor);
+
+        WriteStage thenSubmitMany(String table, Collection<Mutation> mutations, long timeout, TimeUnit unit);
+
+        WriteStage thenSubmitManyAsync(String table, Collection<Mutation> mutations, Executor executor, long timeout, TimeUnit unit);
+
+        WriteStage thenTrySubmitMany(String table, Collection<Mutation> mutations);
+
+    }
 
 }

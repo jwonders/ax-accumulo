@@ -372,12 +372,121 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
     private ExecutorService defaultExecutor() {
         ThreadFactory tf = new ThreadFactoryBuilder()
                 .setNameFormat("async-cw-" + id + "-%d")
+                // setting daemon in case the application doesn't close resources properly
+                .setDaemon(true)
                 .build();
 
         // use an unbounded queue because the semaphore protects against OOME and we want
         // to avoid blocking when submitting tasks for trySubmit methods
         return new ThreadPoolExecutor(0, 16, 60L,
                 TimeUnit.SECONDS, new LinkedBlockingQueue<>(), tf, new AbortPolicy());
+    }
+
+    /*
+     * A task intended to run on a background executor that performs blocking
+     * iteration to wait for a conditional write to complete.  Upon completion
+     * the task completes this future to notify the submitter and possibly
+     * perform dependent completion actions.
+     */
+    private final class CompleteOneTask extends CompletableSingleWriteFuture implements Runnable, SingleWriteFuture {
+
+        private Iterator<Result> resultIter;
+        private final long permits;
+
+        CompleteOneTask(Iterator<Result> resultIter, long permits) {
+            super(AsyncConditionalWriterImpl.this);
+            this.resultIter = resultIter;
+            this.permits = permits;
+        }
+
+        public void run() {
+            try {
+                Result result = getResult();
+                if (result == null || failurePolicy.test(result.getStatus())) {
+                    complete(result);
+                } else {
+                    completeExceptionally(new ResultException(result));
+                }
+            } catch (Throwable e) {
+                completeExceptionally(e);
+            }
+        }
+
+        private Result getResult() {
+            try {
+                return resultIter.hasNext() ? resultIter.next() : null;
+            } finally {
+                resultIter = null;
+                // release permits prior to calling complete in case the caller
+                // schedules dependent completion actions to run in this thread,
+                // particularly those that submit more mutations to this writer
+                capacityLimiter.release(permits);
+            }
+        }
+
+    }
+
+    /*
+     * A task intended to run on a background executor that performs blocking
+     * iteration to wait for a conditional write to complete.  Upon completion
+     * the task completes this future to notify the submitter and possibly
+     * perform dependent completion actions.
+     */
+    private final class CompleteManyTask extends CompletableBatchWriteFuture implements Runnable, BatchWriteFuture {
+
+        private Iterator<Result> resultIter;
+        private final int count;
+        private final long permits;
+
+        CompleteManyTask(Iterator<Result> resultIter, int count, long permits) {
+            super(AsyncConditionalWriterImpl.this);
+            this.resultIter = resultIter;
+            this.count = count;
+            this.permits = permits;
+        }
+
+        public void run() {
+            try {
+                Collection<Result> results = getResults();
+                if (anyFailed(results)) {
+                    completeExceptionally(new ResultBatchException(results));
+                } else {
+                    complete(results);
+                }
+            } catch (Throwable e) {
+                completeExceptionally(e);
+            }
+        }
+
+        private boolean anyFailed(Collection<Result> results) throws AccumuloException, AccumuloSecurityException {
+            for (Result result : results) {
+                if (!failurePolicy.test(result.getStatus())) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private List<ConditionalWriter.Result> getResults() {
+            try {
+                return collectResults();
+            } finally {
+                resultIter = null;
+                // release permits prior to calling complete in case the caller
+                // schedules dependent completion actions to run in this thread,
+                // particularly those that submit more mutations to this writer
+                capacityLimiter.release(permits);
+            }
+        }
+
+        private List<Result> collectResults() {
+            List<Result> results = new ArrayList<>(count);
+            while (resultIter.hasNext()) {
+                results.add(resultIter.next());
+            }
+            return Collections.unmodifiableList(results);
+        }
+
     }
 
     interface WriteFuture<T> extends WriteStage<T>, Future<T> {
@@ -448,101 +557,11 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
 
     interface BatchWriteFuture extends BatchWriteStage, WriteFuture<Collection<Result>> {}
 
-    private final class CompleteOneTask extends CompletableSingleWriteFuture implements Runnable, SingleWriteFuture {
-
-        private Iterator<Result> resultIter;
-        private final long permits;
-
-        CompleteOneTask(Iterator<Result> resultIter, long permits) {
-            super(AsyncConditionalWriterImpl.this);
-            this.resultIter = resultIter;
-            this.permits = permits;
-        }
-
-        public void run() {
-            try {
-                Result result = getResult();
-                if (result == null || failurePolicy.test(result.getStatus())) {
-                    complete(result);
-                } else {
-                    completeExceptionally(new ResultException(result));
-                }
-            } catch (Throwable e) {
-                completeExceptionally(e);
-            }
-        }
-
-        private Result getResult() {
-            try {
-                return resultIter.hasNext() ? resultIter.next() : null;
-            } finally {
-                resultIter = null;
-                // release permits prior to calling complete in case the caller
-                // schedules dependent completion actions to run in this thread,
-                // particularly those that submit more mutations to this writer
-                capacityLimiter.release(permits);
-            }
-        }
-
-    }
-
-    private final class CompleteManyTask extends CompletableBatchWriteFuture implements Runnable, BatchWriteFuture {
-
-        private Iterator<Result> resultIter;
-        private final int count;
-        private final long permits;
-
-        CompleteManyTask(Iterator<Result> resultIter, int count, long permits) {
-            super(AsyncConditionalWriterImpl.this);
-            this.resultIter = resultIter;
-            this.count = count;
-            this.permits = permits;
-        }
-
-        public void run() {
-            try {
-                Collection<Result> results = getResults();
-                if (anyFailed(results)) {
-                    completeExceptionally(new ResultBatchException(results));
-                } else {
-                    complete(results);
-                }
-            } catch (Throwable e) {
-                completeExceptionally(e);
-            }
-        }
-
-        private boolean anyFailed(Collection<Result> results) throws AccumuloException, AccumuloSecurityException {
-            for (Result result : results) {
-                if (!failurePolicy.test(result.getStatus())) {
-                    return true;
-                }
-            }
-            return false;
-        }
-
-        private List<ConditionalWriter.Result> getResults() {
-            try {
-                return collectResults();
-            } finally {
-                resultIter = null;
-                // release permits prior to calling complete in case the caller
-                // schedules dependent completion actions to run in this thread,
-                // particularly those that submit more mutations to this writer
-                capacityLimiter.release(permits);
-            }
-        }
-
-        private List<Result> collectResults() {
-            List<Result> results = new ArrayList<>(count);
-            while (resultIter.hasNext()) {
-                results.add(resultIter.next());
-            }
-            return Collections.unmodifiableList(results);
-        }
-
-    }
-
+    /*
+     * Implements WriteFuture to provide the caller with some syntactic sugar
+     * for scheduling dependent writes and other dependent completion actions
+     * without giving up that syntactic sugar.
+     */
     private static class CompletableWriteFuture<T> extends CompletableFuture<T> implements WriteFuture<T> {
 
         private final AsyncConditionalWriterImpl writer;
