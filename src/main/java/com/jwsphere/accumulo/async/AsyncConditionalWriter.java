@@ -163,7 +163,7 @@ public interface AsyncConditionalWriter extends AutoCloseable, Awaitable {
      * collectively such that only when all complete, will the completion stage
      * exhibit a result.
      */
-    BatchWriteStage submitManyAsync(Collection<ConditionalMutation> mutations, Executor executor) throws InterruptedException;
+    BatchWriteStage submitManyAsync(Collection<ConditionalMutation> mutations, Executor executor);
 
     /**
      * Submits a collection of mutations for insertion into the table.
@@ -202,7 +202,7 @@ public interface AsyncConditionalWriter extends AutoCloseable, Awaitable {
      * collectively such that only when all complete, will the completion stage
      * exhibit a result.
      */
-    BatchWriteStage submitManyAsync(Collection<ConditionalMutation> mutations, Executor executor, long timeout, TimeUnit unit) throws InterruptedException;
+    BatchWriteStage submitManyAsync(Collection<ConditionalMutation> mutations, Executor executor, long timeout, TimeUnit unit);
 
     /**
      * Attempts to submit a collection of mutations for insertion into the table.
@@ -367,6 +367,7 @@ public interface AsyncConditionalWriter extends AutoCloseable, Awaitable {
     }
 
     interface SingleWriteStage extends WriteStage<Result> {}
+
     interface BatchWriteStage extends WriteStage<Collection<Result>> {}
 
 }

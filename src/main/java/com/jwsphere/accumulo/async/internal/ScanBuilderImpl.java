@@ -9,17 +9,20 @@ import org.apache.accumulo.core.data.Range;
 import org.apache.accumulo.core.security.Authorizations;
 
 import java.util.Objects;
+import java.util.concurrent.Executor;
 
 public class ScanBuilderImpl implements ScanBuilder {
 
     private final Connector connector;
     private final String tableName;
     private final MutableScanRecipe recipe;
+    private final Executor executor;
 
-    public ScanBuilderImpl(Connector connector, String tableName) {
+    public ScanBuilderImpl(Connector connector, String tableName, Executor executor) {
         this.connector = connector;
         this.tableName = tableName;
         this.recipe = new MutableScanRecipe();
+        this.executor = executor;
     }
 
     @Override
@@ -74,7 +77,7 @@ public class ScanBuilderImpl implements ScanBuilder {
 
     @Override
     public AsyncScanner build() {
-        return new AsyncScannerImpl(connector, tableName, recipe);
+        return new AsyncScannerImpl(connector, tableName, recipe, executor);
     }
 
 }

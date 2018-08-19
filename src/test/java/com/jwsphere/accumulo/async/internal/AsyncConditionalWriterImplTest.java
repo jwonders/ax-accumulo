@@ -1,16 +1,8 @@
 package com.jwsphere.accumulo.async.internal;
 
-import com.jwsphere.accumulo.async.AccumuloParameterResolver;
-import com.jwsphere.accumulo.async.AccumuloProvider;
-import com.jwsphere.accumulo.async.AsyncConditionalWriter;
+import com.jwsphere.accumulo.async.*;
 import com.jwsphere.accumulo.async.AsyncConditionalWriter.SingleWriteStage;
 import com.jwsphere.accumulo.async.AsyncConditionalWriter.WriteStage;
-import com.jwsphere.accumulo.async.AsyncConditionalWriterConfig;
-import com.jwsphere.accumulo.async.AsyncConnector;
-import com.jwsphere.accumulo.async.AsyncScanner;
-import com.jwsphere.accumulo.async.CollectingScanObserver;
-import com.jwsphere.accumulo.async.FailurePolicy;
-import com.jwsphere.accumulo.async.ResultException;
 import org.apache.accumulo.core.client.AccumuloException;
 import org.apache.accumulo.core.client.AccumuloSecurityException;
 import org.apache.accumulo.core.client.ConditionalWriter.Result;
@@ -19,32 +11,21 @@ import org.apache.accumulo.core.client.Connector;
 import org.apache.accumulo.core.client.ZooKeeperInstance;
 import org.apache.accumulo.core.data.Condition;
 import org.apache.accumulo.core.data.ConditionalMutation;
-import org.apache.accumulo.core.data.Key;
 import org.apache.accumulo.core.data.Range;
-import org.apache.accumulo.core.data.Value;
 import org.apache.log4j.Logger;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 
-import java.util.Map.Entry;
 import java.util.SortedSet;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.CompletionStage;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ForkJoinPool;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.function.Function;
 
 import static com.jwsphere.accumulo.async.internal.MoreCompletableFutures.immediatelyFailed;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.concurrent.CompletableFuture.completedFuture;
-import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
-import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.*;
 
 @ExtendWith(AccumuloParameterResolver.class)
 public class AsyncConditionalWriterImplTest {
@@ -298,20 +279,21 @@ public class AsyncConditionalWriterImplTest {
             this.cm = cm;
         }
 
-        private CompletableFuture<SortedSet<Entry<Key, Value>>> scan() {
+        private CompletableFuture<SortedSet<Cell>> scan() {
             AsyncScanner scanner = asyncConnector.createScanBuilder("table")
                     .range(Range.exact("immediately_fail_exceeding_capacity"))
+                    .isolation(true)
                     .build();
-            CollectingScanObserver scanOperation = new CollectingScanObserver();
-            scanner.scanOn(scanOperation, ForkJoinPool.commonPool());
-            return scanOperation;
+            CollectingScanSubscriber collector = new CollectingScanSubscriber();
+            scanner.subscribe(collector);
+            return collector;
         }
 
         private SingleWriteStage scanAndMaybeRetry(Result result) {
             return writer.asSingleStage(scan().thenCompose(maybeRetry(result)));
         }
 
-        private Function<SortedSet<Entry<Key, Value>>, CompletionStage<Result>> maybeRetry(Result result) {
+        private Function<SortedSet<Cell>, CompletionStage<Result>> maybeRetry(Result result) {
             return entries -> {
                 boolean wasAccepted = checkWasAccepted(entries);
                 boolean wouldBeRejected = checkWouldBeRejected(entries);
@@ -330,12 +312,12 @@ public class AsyncConditionalWriterImplTest {
             };
         }
 
-        private boolean checkWouldBeRejected(SortedSet<Entry<Key, Value>> entries) {
+        private boolean checkWouldBeRejected(SortedSet<Cell> entries) {
             // maybe there was a write collision or race condition with another writer
             return !entries.isEmpty();
         }
 
-        private boolean checkWasAccepted(SortedSet<Entry<Key, Value>> entries) {
+        private boolean checkWasAccepted(SortedSet<Cell> entries) {
             // in reality should check for columns that determine if the mutation was accepted
             return !entries.isEmpty();
         }

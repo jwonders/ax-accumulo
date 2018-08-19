@@ -5,6 +5,10 @@ import org.apache.accumulo.core.client.ConditionalWriter.Result;
 import java.io.Serializable;
 import java.util.concurrent.CompletionException;
 
+/**
+ * Indicates a result was obtained, but the failure policy dictated that
+ * the status was to be considered exceptional.
+ */
 public class ResultException extends CompletionException implements Serializable {
 
     private final Result result;
@@ -13,7 +17,7 @@ public class ResultException extends CompletionException implements Serializable
         this.result = result;
     }
 
-    public Result getStatus() {
+    public Result getResult() {
         return result;
     }
 

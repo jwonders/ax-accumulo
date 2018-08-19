@@ -4,8 +4,8 @@ import java.util.concurrent.CancellationException;
 
 /**
  * Indicates that a resource required for submission could not be acquired
- * within a limited time bound.  This could be due to a strict capacity
- * limit or a looser rate limit.
+ * within a limited time.  This could be due to a strict capacity limit or
+ * a looser rate limit.
  *
  * @author Jonathan Wonders
  */

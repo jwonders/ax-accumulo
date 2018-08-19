@@ -11,6 +11,8 @@ import com.jwsphere.accumulo.async.ResultBatchException;
 import com.jwsphere.accumulo.async.ResultException;
 import com.jwsphere.accumulo.async.SubmissionTimeoutException;
 import com.jwsphere.accumulo.async.internal.Interruptible.InterruptibleFunction;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.accumulo.core.client.AccumuloException;
 import org.apache.accumulo.core.client.AccumuloSecurityException;
 import org.apache.accumulo.core.client.ConditionalWriter;
@@ -44,16 +46,16 @@ import static com.jwsphere.accumulo.async.internal.Interruptible.propagateInterr
 import static com.jwsphere.accumulo.async.internal.MoreCompletableFutures.propagateResultTo;
 
 /**
- * The asynchronous conditional writer allows a bounded size of mutations to
- * be in the process of being written to Accumulo and informs the submitter upon
+ * The asynchronous conditional writer allows a bounded set of mutations to be
+ * in the process of being written to Accumulo and informs the submitter upon
  * completion or error.
  *
- * The number of in-flight mutations is bounded since the underlying conditional
- * writer uses an unbounded queue and does not protect against out of memory
- * errors.  Mutations are submitted to the underlying writer in the caller's
- * thread since the writer's internal blocking queue is unbounded and should
- * never block.  This assumption is important for the non-blocking methods to
- * exhibit proper behavior (e.g. ${code trySubmit}, ${code trySubmitMany})
+ * The number of in-flight mutations needs to be bounded since the underlying
+ * conditional writer uses an unbounded queue and does not protect against out
+ * of memory errors.  Mutations are submitted to the underlying writer in the
+ * caller's thread since the writer's internal blocking queue is unbounded and
+ * should never block.  This assumption is important for the non-blocking methods
+ * to exhibit proper behavior (e.g. ${code trySubmit}, ${code trySubmitMany})
  * since the writer does not otherwise have a non-blocking submission method.
  *
  * Note: The conditional writer does incur some per-mutation overhead due to
@@ -82,17 +84,23 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
     private final RateLimiter rateLimiter;
     private final FailurePolicy failurePolicy;
 
+    private final MeterRegistry registry;
+
     /**
      * Creates an async conditional writer.
      */
     public AsyncConditionalWriterImpl(Connector connector, String tableName, AsyncConditionalWriterConfig config) throws TableNotFoundException {
-        this.writer = connector.createConditionalWriter(tableName, config.getConditionalWriterConfig());
-        this.barrier = new CompletionBarrier();
-        this.completionExecutor = defaultExecutor();
-        this.capacityLimit = config.getMemoryCapacityLimit().orElse(Long.MAX_VALUE);
-        this.capacityLimiter = new LongSemaphore(capacityLimit);
-        this.rateLimiter = null;
-        this.failurePolicy = FailurePolicy.allNormal();
+        this(connector, tableName, config, new SimpleMeterRegistry());
+    }
+
+    /**
+     * Creates an async conditional writer.
+     */
+    public AsyncConditionalWriterImpl(Connector connector, String tableName, AsyncConditionalWriterConfig config, MeterRegistry registry) throws TableNotFoundException {
+        this(connector.createConditionalWriter(tableName, config.getConditionalWriterConfig()),null,
+                config.getMemoryCapacityLimit().orElse(Long.MAX_VALUE),
+                new LongSemaphore(config.getMemoryCapacityLimit().orElse(Long.MAX_VALUE)),
+                null, FailurePolicy.allNormal(), registry);
     }
 
     /**
@@ -100,25 +108,27 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
      */
     private AsyncConditionalWriterImpl(ConditionalWriter writer, ExecutorService completionExecutor,
                                        long capacityLimit, LongSemaphore capacityLimiter,
-                                       RateLimiter rateLimiter, FailurePolicy failurePolicy) {
+                                       RateLimiter rateLimiter, FailurePolicy failurePolicy,
+                                       MeterRegistry registry) {
         this.writer = writer;
         this.barrier = new CompletionBarrier();
-        this.completionExecutor = completionExecutor;
+        this.completionExecutor = completionExecutor == null ? defaultExecutor() : completionExecutor;
         this.capacityLimit = capacityLimit;
         this.capacityLimiter = capacityLimiter;
         this.rateLimiter = rateLimiter;
         this.failurePolicy = failurePolicy;
+        this.registry = registry;
     }
 
     @Override
     public AsyncConditionalWriter withRateLimit(double bytesPerSecond) {
         RateLimiter rateLimiter = RateLimiter.create(bytesPerSecond);
-        return new AsyncConditionalWriterImpl(writer, completionExecutor, capacityLimit, capacityLimiter, rateLimiter, failurePolicy);
+        return new AsyncConditionalWriterImpl(writer, completionExecutor, capacityLimit, capacityLimiter, rateLimiter, failurePolicy, registry);
     }
 
     @Override
     public AsyncConditionalWriter withFailurePolicy(FailurePolicy failurePolicy) {
-        return new AsyncConditionalWriterImpl(writer, completionExecutor, capacityLimit, capacityLimiter, rateLimiter, failurePolicy);
+        return new AsyncConditionalWriterImpl(writer, completionExecutor, capacityLimit, capacityLimiter, rateLimiter, failurePolicy, registry);
     }
 
     @Override
@@ -148,7 +158,10 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
         if (remaining <= 0) {
             return failedConditionalWriteFuture(SUBMISSION_TIMEOUT);
         }
-        capacityLimiter.tryAcquire(permits, remaining, unit);
+        boolean acquired = capacityLimiter.tryAcquire(permits, remaining, unit);
+        if (!acquired) {
+            return failedConditionalWriteFuture(SUBMISSION_TIMEOUT);
+        }
         return doSubmit(cm, permits);
     }
 
@@ -168,7 +181,10 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
         if (!allowed) {
             return failedConditionalWriteFuture(SUBMISSION_TIMEOUT);
         }
-        capacityLimiter.tryAcquire(permits);
+        boolean acquired = capacityLimiter.tryAcquire(permits);
+        if (!acquired) {
+            return failedConditionalWriteFuture(SUBMISSION_TIMEOUT);
+        }
         return doSubmit(cm, permits);
     }
 
@@ -192,7 +208,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
     }
 
     @Override
-    public BatchWriteStage submitManyAsync(Collection<ConditionalMutation> mutations, Executor executor) throws InterruptedException {
+    public BatchWriteStage submitManyAsync(Collection<ConditionalMutation> mutations, Executor executor) {
         Supplier<BatchWriteStage> submitTask = Interruptible.supplier(() -> submitMany(mutations));
         return asBatchStage(CompletableFuture.supplyAsync(submitTask, executor).thenCompose(Function.identity()));
     }
@@ -212,7 +228,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
     }
 
     @Override
-    public BatchWriteStage submitManyAsync(Collection<ConditionalMutation> mutations, Executor executor, long timeout, TimeUnit unit) throws InterruptedException {
+    public BatchWriteStage submitManyAsync(Collection<ConditionalMutation> mutations, Executor executor, long timeout, TimeUnit unit) {
         Supplier<BatchWriteStage> submitTask = Interruptible.supplier(() -> submitMany(mutations, timeout, unit));
         return asBatchStage(CompletableFuture.supplyAsync(submitTask, executor).thenCompose(Function.identity()));
     }
@@ -227,7 +243,10 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
         if (!allowed) {
             return failedConditionalBatchWriteFuture(SUBMISSION_TIMEOUT);
         }
-        capacityLimiter.tryAcquire(permits);
+        boolean acquired = capacityLimiter.tryAcquire(permits);
+        if (!acquired) {
+            return failedConditionalBatchWriteFuture(SUBMISSION_TIMEOUT);
+        }
         return doSubmitMany(mutations, permits);
     }
 

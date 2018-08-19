@@ -8,7 +8,6 @@ import org.apache.accumulo.core.security.Authorizations;
 
 import java.util.Collection;
 import java.util.SortedSet;
-import java.util.TreeSet;
 
 public class ImmutableScanRecipe implements ScanRecipe {
 
@@ -22,13 +21,13 @@ public class ImmutableScanRecipe implements ScanRecipe {
     private final SamplerConfiguration samplerConfig;
 
     private ImmutableScanRecipe(ScanRecipe recipe) {
-        this.range = new Range(recipe.getRange()); // TODO this isn't a deep copy
-        this.fetchedColumns = new TreeSet<>(recipe.getFetchedColumns()); // TODO this isn't a deep copy
+        this.range = Ranges.deepCopyOf(recipe.getRange());
+        this.fetchedColumns = Columns.deepCopyOf(recipe.getFetchedColumns());
         this.auth = recipe.getAuthorizations();
         this.isolated = recipe.isIsolated();
         this.classLoaderContext = recipe.getClassLoaderContext();
-        this.iterators = recipe.getIterators();
-        this.samplerConfig = recipe.getSamplerConfiguration();
+        this.iterators = recipe.getIterators(); // TODO deep copy
+        this.samplerConfig = recipe.getSamplerConfiguration(); // TODO deep copy
     }
 
     @Override

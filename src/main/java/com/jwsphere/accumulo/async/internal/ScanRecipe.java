@@ -25,6 +25,4 @@ public interface ScanRecipe {
 
     SamplerConfiguration getSamplerConfiguration();
 
-
-
 }

@@ -1,8 +1,8 @@
 package com.jwsphere.accumulo.async.internal;
 
 import com.jwsphere.accumulo.async.AsyncScanner;
-import com.jwsphere.accumulo.async.ScanController;
-import com.jwsphere.accumulo.async.ScanObserver;
+import com.jwsphere.accumulo.async.Cell;
+import com.jwsphere.accumulo.async.ScanSubscriber;
 import org.apache.accumulo.core.client.Connector;
 import org.apache.accumulo.core.client.IteratorSetting;
 import org.apache.accumulo.core.client.Scanner;
@@ -14,52 +14,57 @@ import org.apache.hadoop.io.Text;
 
 import java.util.Map.Entry;
 import java.util.concurrent.Executor;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.locks.Condition;
-import java.util.concurrent.locks.Lock;
-import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.ForkJoinPool;
 
 /**
  * An "async" scanner that simply iterates through scan results and
- * calls the observer when results are available.
+ * calls the observer when results are available.  The iteration may
+ * scheduled on a thread other than the calling thread.
  */
 public class AsyncScannerImpl implements AsyncScanner {
 
     private final Connector connector;
     private final String tableName;
     private final ScanRecipe recipe;
+    private final Executor executor;
 
-    AsyncScannerImpl(Connector connector, String tableName, ScanRecipe recipe) {
+    public AsyncScannerImpl(Connector connector, String tableName, ScanRecipe recipe) {
+        this(connector, tableName, recipe, ForkJoinPool.commonPool());
+    }
+
+    public AsyncScannerImpl(Connector connector, String tableName, ScanRecipe recipe, Executor executor) {
         this.connector = connector;
         this.tableName = tableName;
         this.recipe = ImmutableScanRecipe.copyOf(recipe);
+        this.executor = executor;
     }
 
     @Override
-    public void scan(ScanObserver observer) {
-        try {
-            Scanner scanner = createScanner();
-            ScanControllerImpl controller = new ScanControllerImpl();
-            observer.onInitialize(controller);
-            for (Entry<Key, Value> next : scanner) {
-                controller.respectFlowControl();
-                boolean cancelled = controller.cancelled.get();
-                if (cancelled) {
-                    observer.onComplete();
-                    return;
+    public void subscribe(ScanSubscriber observer) {
+        executor.execute(scanTask(observer));
+    }
+
+    private Runnable scanTask(ScanSubscriber observer) {
+        return () -> {
+            // since the scanner blocks on calls to hasNext, it doesn't really
+            // make sense to try and multiplex the execution of multiple scans
+            // on a single thread
+            try (Scanner scanner = createScanner()) {
+                ScanSubscriptionImpl controller = new ScanSubscriptionImpl();
+                observer.onSubscribe(controller);
+                for (Entry<Key, Value> next : scanner) {
+                    controller.awaitFlowPermission();
+                    if (controller.isCancelled()) {
+                        observer.onComplete();
+                        return;
+                    }
+                    observer.onNext(Cell.of(next.getKey(), next.getValue()));
                 }
-                observer.onNext(next.getKey(), next.getValue());
+                observer.onComplete();
+            } catch (TableNotFoundException | RuntimeException e) {
+                observer.onError(e);
             }
-            observer.onComplete();
-
-        } catch (TableNotFoundException | RuntimeException e) {
-            observer.onError(e);
-        }
-    }
-
-    @Override
-    public void scanOn(ScanObserver observer, Executor executor) {
-        executor.execute(() -> scan(observer));
+        };
     }
 
     private Scanner createScanner() throws TableNotFoundException {
@@ -80,48 +85,6 @@ public class AsyncScannerImpl implements AsyncScanner {
             scanner.addScanIterator(iteratorSetting);
         }
         return scanner;
-    }
-
-    private static final class ScanControllerImpl implements ScanController {
-
-
-        private final AtomicBoolean cancelled = new AtomicBoolean(false);
-        private final Lock lock = new ReentrantLock();
-        private final Condition notEmpty = lock.newCondition();
-
-        // @GuardedBy("lock")
-        private long requested = 0;
-
-        @Override
-        public void request(int elements) {
-            lock.lock();
-            try {
-                requested += elements;
-                notEmpty.signalAll();
-            } finally {
-                lock.unlock();
-            }
-        }
-
-        @Override
-        public void cancel() {
-            cancelled.set(true);
-        }
-
-        private void respectFlowControl() {
-            lock.lock();
-            try {
-                while (requested <= 0) {
-                    notEmpty.await();
-                }
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                throw new RuntimeException(e);
-            } finally {
-                lock.unlock();
-            }
-        }
-
     }
 
 }

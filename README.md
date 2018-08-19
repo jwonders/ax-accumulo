@@ -124,3 +124,19 @@ The failure policy can be customized as needed.  Any writers derived from
 an existing writer through `withRateLimit` will inherit the failure policy.
 Similarly when configuring a failure policy, the returned writer will share
 the rate limiter.
+
+### Async Scanning
+
+``` java
+AsyncConnector connector = ...
+    
+AsyncScanner scanner = asyncConnector.createScanBuilder("table")
+    .range(Range.exact("row"))
+    .isolation(true)
+    .build();
+
+CollectingScanSubscriber subscriber = new CollectingScanSubscriber();    
+scanner.subscribe(subscriber)
+
+SortedSet<Cell> cells = subscriber.join();
+```

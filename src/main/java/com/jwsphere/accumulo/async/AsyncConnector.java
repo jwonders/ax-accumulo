@@ -3,6 +3,8 @@ package com.jwsphere.accumulo.async;
 import com.jwsphere.accumulo.async.internal.AsyncConditionalWriterImpl;
 import com.jwsphere.accumulo.async.internal.AsyncMultiTableBatchWriterImpl;
 import com.jwsphere.accumulo.async.internal.ScanBuilderImpl;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.accumulo.core.client.BatchWriterConfig;
 import org.apache.accumulo.core.client.ConditionalWriter;
 import org.apache.accumulo.core.client.Connector;
@@ -23,12 +25,14 @@ import java.util.function.Function;
  */
 public class AsyncConnector {
 
-    private Connector connector;
-    private Executor executor;
+    private final Connector connector;
+    private final Executor executor;
+    private final MeterRegistry registry;
 
-    private AsyncConnector(Connector connector, Executor executor) {
+    private AsyncConnector(Connector connector, Executor executor, MeterRegistry registry) {
         this.connector = connector;
         this.executor = executor;
+        this.registry = registry;
     }
 
     public Connector getConnector() {
@@ -52,11 +56,19 @@ public class AsyncConnector {
     }
 
     public AsyncMultiTableBatchWriter createMultiTableBatchWriter(BatchWriterConfig config) {
-        return new AsyncMultiTableBatchWriterImpl(() -> connector.createMultiTableBatchWriter(config));
+        return new AsyncMultiTableBatchWriterImpl(() -> connector.createMultiTableBatchWriter(config),
+                AsyncMultiTableBatchWriterConfig.create(config),
+                registry
+        );
+    }
+
+    public AsyncMultiTableBatchWriter createMultiTableBatchWriter(AsyncMultiTableBatchWriterConfig config) {
+        return new AsyncMultiTableBatchWriterImpl(
+                () -> connector.createMultiTableBatchWriter(config.getBatchWriterConfig()), config, registry);
     }
 
     public ScanBuilder createScanBuilder(String table) {
-        return new ScanBuilderImpl(connector, table);
+        return new ScanBuilderImpl(connector, table, executor);
     }
 
     public static AsyncConnector wrap(Connector connector) {
@@ -64,7 +76,11 @@ public class AsyncConnector {
     }
 
     public static AsyncConnector wrap(Connector connector, Executor defaultExecutor) {
-        return new AsyncConnector(connector, defaultExecutor);
+        return new AsyncConnector(connector, defaultExecutor, new SimpleMeterRegistry());
+    }
+
+    public static AsyncConnector wrap(Connector connector, Executor defaultExecutor, MeterRegistry registry) {
+        return new AsyncConnector(connector, defaultExecutor, registry);
     }
 
 }
