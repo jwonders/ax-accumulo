@@ -2,16 +2,20 @@
 
 Asynchronous extensions to Accumulo
 
-The ax-accumulo project wraps existing Accumulo APIs for asynchronous execution 
-in background threads.  It relies heavily on Java 8 `CompletionStage` and
-`CompletableFuture` to communicate results to the original caller and allow
-for composition of dependent actions.
+The ax-accumulo project provides an asynchronous programming model in
+front of existing public Accumulo APIs.  It relies heavily on Java 8 
+`CompletionStage` and `CompletableFuture` to communicate results to 
+the original caller and allow for composition of dependent actions.  
+It aims to align with the Java 9 `Flow` contracts when asynchronous 
+streams are involved to simplify bridging with reactive stream 
+libraries.
 
 ## Why
 
-There are a number of problems that benefit from highly concurrent multi-step
-operations across multiple Accumulo rows.  Throughput is essential, but
-minimizing end-to-end latency is an important secondary goal.
+There are a number of problems that can benefit from highly concurrent 
+multi-step operations across multiple Accumulo rows.  Throughput is 
+essential, but minimizing end-to-end latency is an important secondary 
+goal.
 
 Accumulo is fundamentally capable of achieving very good performance for
 this type of problem.  However, it can be cumbersome to implement a 
@@ -37,16 +41,14 @@ operations.  By default the executor will be the `ForkJoinPool.commonPool()`
 The `AsyncConnector` exposes an API that parallels the Accumulo APIs but
 performs operations asynchronously.  You will see methods for async table
 operations, async security operations, and async namespace operations along
-with ways to construct async writers.
-
+with ways to construct async writers and async scanners.
 
 ## Async Writers
 
 Creating an `AsyncConditionalWriter` is similar to creating a `ConditionalWriter`
 using the Accumulo API.  First, create an `AsyncConditionalWriterConfig`.
 It is similar to the `ConditionalWriterConfig` but also supports configuring
-a limit for the memory consumed by in-flight submitted mutations.  We don't
-want to run out of memory now, do we.
+a limit for the memory consumed by in-flight submitted mutations.
 
 It is certainly possible to limit memory usage at the application level.  
 If you have another mechanism for avoiding out of memory errors, this can 
@@ -127,16 +129,50 @@ the rate limiter.
 
 ### Async Scanning
 
+The asynchronous scanning API is designed around the Java 9 `Flow` API
+which provides standard building blocks to connect asynchronous scans to 
+libraries that provide reactive operators for manipulating asynchronous
+streams.
+
+| ax-accumulo class  | Behaves As              |
+|--------------------|-------------------------|
+| `AsyncScanner`     | `Flow.Publisher<Cell>`  |
+| `ScanSubscriber`   | `Flow.Subscriber<Cell>` |
+| `ScanSubscription` | `Flow.Subscription`     |
+
+The `AsyncScanner` acts like an asynchronous `Iterable` in that it can
+generate multiple scans from the same recipe.  Of course, if the data
+is actively being modified, there is no isolation across scans just as
+Accumulo does not provide isolation across rows.
+
+Each call to `subscribe(ScanSubscriber)` will initiate a separate scan.
+
+
 ``` java
 AsyncConnector connector = ...
-    
+
 AsyncScanner scanner = asyncConnector.createScanBuilder("table")
     .range(Range.exact("row"))
     .isolation(true)
     .build();
 
-CollectingScanSubscriber subscriber = new CollectingScanSubscriber();    
-scanner.subscribe(subscriber)
+ScanSubscriber subscriber = ...
+scanner.subscribe(subscriber);
+```
 
-SortedSet<Cell> cells = subscriber.join();
+In many cases, all cells within the scanned range need to be collected
+prior to processing.  To simplify this case, the library provides some
+convenience methods for asynchronously collecting cells.
+
+``` java
+AsyncConnector connector = ...
+
+AsyncScanner scanner = asyncConnector.createScanBuilder("table")
+    .range(Range.exact("row"))
+    .isolation(true)
+    .build();
+    
+CompletableFuture<List<Cell>> list = scanner.toList();
+CompletableFuture<SortedSet<Cell>> set = scanner.toSortedSet();
+CompletableFuture<SortedMap<Key, Value>> map = scanner.toSortedMap();
 ```

@@ -34,8 +34,7 @@ public interface AsyncScanner /* extends Flow.Publisher JDK-9 */{
     }
 
     default CompletableFuture<SortedMap<Key, Value>> toSortedMap() {
-        CollectingScanSubscriber<SortedMap<Key, Value>> subscriber =
-                CollectingScanSubscriber.toSortedMap(Cell::getKey, Cell::getValue);
+        CollectingScanSubscriber<SortedMap<Key, Value>> subscriber = CollectingScanSubscriber.toSortedMap();
         subscribe(subscriber);
         return subscriber;
     }

@@ -62,6 +62,10 @@ public class AsyncConnector {
         return new ScanBuilderImpl(connector, table, executor);
     }
 
+    public ScanBuilder createScanBuilder(String table, Executor executor) {
+        return new ScanBuilderImpl(connector, table, executor);
+    }
+
     public static AsyncConnector wrap(Connector connector) {
         return wrap(connector, ForkJoinPool.commonPool());
     }
