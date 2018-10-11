@@ -13,14 +13,14 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
-public class NopAsyncMTBWTest {
+public class NoopAsyncMTBWTest {
 
     @Test
     @Disabled
     public void testCachedBatchWriterPutMany() throws Exception {
         byte[] value = new byte[256];
 
-        try (AsyncMultiTableBatchWriter bw = new AsyncMultiTableBatchWriterImpl(NopMultiTableBatchWriter::new)) {
+        try (AsyncMultiTableBatchWriter bw = new AsyncMultiTableBatchWriterImpl(NoopMultiTableBatchWriter::new)) {
             AsyncBatchWriter abw = bw.getBatchWriter("table");
 
             AtomicLong submitted = new AtomicLong();

@@ -326,8 +326,6 @@ public interface AsyncConditionalWriter extends AutoCloseable, Awaitable {
 
         BatchWriteStage thenTrySubmit(Collection<ConditionalMutation> cm);
 
-        <U> WriteStage<U> thenComposeSubmit(BiFunction<T, AsyncConditionalWriter, CompletionStage<U>> fn);
-
         @Override
         <U> WriteStage<U> handle(BiFunction<? super T, Throwable, ? extends U> fn);
 

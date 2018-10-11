@@ -7,7 +7,6 @@ import com.jwsphere.accumulo.async.AsyncConnector;
 import com.jwsphere.accumulo.async.AsyncMultiTableBatchWriter;
 import org.apache.accumulo.core.client.BatchWriterConfig;
 import org.apache.accumulo.core.client.Connector;
-import org.apache.accumulo.core.client.ZooKeeperInstance;
 import org.apache.accumulo.core.data.Mutation;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
@@ -28,11 +27,7 @@ public class AsyncMultiTableBatchWriterImplTest {
     @BeforeAll
     public static void beforeAll(AccumuloProvider accumulo) throws Exception {
         AsyncMultiTableBatchWriterImplTest.accumulo = accumulo;
-        ZooKeeperInstance instance = new ZooKeeperInstance(
-                accumulo.getAccumuloCluster().getInstanceName(),
-                accumulo.getAccumuloCluster().getZooKeepers()
-        );
-        connector = instance.getConnector(accumulo.getAdminUser(), accumulo.getAdminToken());
+        connector = accumulo.newAdminConnector();
         connector.tableOperations().create("table");
     }
 

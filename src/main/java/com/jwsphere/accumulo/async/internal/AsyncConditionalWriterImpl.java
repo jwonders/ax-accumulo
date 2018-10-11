@@ -11,8 +11,6 @@ import com.jwsphere.accumulo.async.ResultBatchException;
 import com.jwsphere.accumulo.async.ResultException;
 import com.jwsphere.accumulo.async.SubmissionTimeoutException;
 import com.jwsphere.accumulo.async.internal.Interruptible.InterruptibleFunction;
-import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.apache.accumulo.core.client.AccumuloException;
 import org.apache.accumulo.core.client.AccumuloSecurityException;
 import org.apache.accumulo.core.client.ConditionalWriter;
@@ -84,23 +82,14 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
     private final RateLimiter rateLimiter;
     private final FailurePolicy failurePolicy;
 
-    private final MeterRegistry registry;
-
     /**
      * Creates an async conditional writer.
      */
     public AsyncConditionalWriterImpl(Connector connector, String tableName, AsyncConditionalWriterConfig config) throws TableNotFoundException {
-        this(connector, tableName, config, new SimpleMeterRegistry());
-    }
-
-    /**
-     * Creates an async conditional writer.
-     */
-    public AsyncConditionalWriterImpl(Connector connector, String tableName, AsyncConditionalWriterConfig config, MeterRegistry registry) throws TableNotFoundException {
         this(connector.createConditionalWriter(tableName, config.getConditionalWriterConfig()),null,
                 config.getMemoryCapacityLimit().orElse(Long.MAX_VALUE),
                 new LongSemaphore(config.getMemoryCapacityLimit().orElse(Long.MAX_VALUE)),
-                null, FailurePolicy.allNormal(), registry);
+                null, FailurePolicy.allNormal());
     }
 
     /**
@@ -108,8 +97,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
      */
     private AsyncConditionalWriterImpl(ConditionalWriter writer, ExecutorService completionExecutor,
                                        long capacityLimit, LongSemaphore capacityLimiter,
-                                       RateLimiter rateLimiter, FailurePolicy failurePolicy,
-                                       MeterRegistry registry) {
+                                       RateLimiter rateLimiter, FailurePolicy failurePolicy) {
         this.writer = writer;
         this.barrier = new CompletionBarrier();
         this.completionExecutor = completionExecutor == null ? defaultExecutor() : completionExecutor;
@@ -117,18 +105,17 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
         this.capacityLimiter = capacityLimiter;
         this.rateLimiter = rateLimiter;
         this.failurePolicy = failurePolicy;
-        this.registry = registry;
     }
 
     @Override
     public AsyncConditionalWriter withRateLimit(double bytesPerSecond) {
         RateLimiter rateLimiter = RateLimiter.create(bytesPerSecond);
-        return new AsyncConditionalWriterImpl(writer, completionExecutor, capacityLimit, capacityLimiter, rateLimiter, failurePolicy, registry);
+        return new AsyncConditionalWriterImpl(writer, completionExecutor, capacityLimit, capacityLimiter, rateLimiter, failurePolicy);
     }
 
     @Override
     public AsyncConditionalWriter withFailurePolicy(FailurePolicy failurePolicy) {
-        return new AsyncConditionalWriterImpl(writer, completionExecutor, capacityLimit, capacityLimiter, rateLimiter, failurePolicy, registry);
+        return new AsyncConditionalWriterImpl(writer, completionExecutor, capacityLimit, capacityLimiter, rateLimiter, failurePolicy);
     }
 
     @Override
@@ -424,7 +411,7 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
                 if (result == null || failurePolicy.test(result.getStatus())) {
                     complete(result);
                 } else {
-                    completeExceptionally(new ResultException(result));
+                    completeExceptionally(ResultException.of(result));
                 }
             } catch (Throwable e) {
                 completeExceptionally(e);
@@ -645,11 +632,6 @@ public final class AsyncConditionalWriterImpl implements AsyncConditionalWriter 
 
         private BatchWriteFuture thenSubmitMany(InterruptibleFunction<T, BatchWriteStage> submitter) {
             return writer.asBatchFuture(super.thenCompose(propagateInterrupt(submitter)));
-        }
-
-        @Override
-        public <U> CompletableWriteFuture<U> thenComposeSubmit(BiFunction<T, AsyncConditionalWriter, CompletionStage<U>> fn) {
-            return writer.asGenericFuture(super.thenCompose(result -> fn.apply(result, writer)));
         }
 
         @Override

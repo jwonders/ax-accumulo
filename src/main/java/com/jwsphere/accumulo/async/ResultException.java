@@ -6,14 +6,14 @@ import java.io.Serializable;
 import java.util.concurrent.CompletionException;
 
 /**
- * Indicates a result was obtained, but the failure policy dictated that
- * the status was to be considered exceptional.
+ * Indicates a result was obtained, but the status was considered to
+ * be a failure according to the failure policy.
  */
 public class ResultException extends CompletionException implements Serializable {
 
     private final Result result;
 
-    public ResultException(Result result) {
+    private ResultException(Result result) {
         this.result = result;
     }
 
@@ -23,9 +23,11 @@ public class ResultException extends CompletionException implements Serializable
 
     @Override
     public String toString() {
-        return "ResultException{" +
-                "result=" + result +
-                '}';
+        return "ResultException{result=" + result + '}';
+    }
+
+    public static ResultException of(Result result) {
+        return new ResultException(result);
     }
 
 }

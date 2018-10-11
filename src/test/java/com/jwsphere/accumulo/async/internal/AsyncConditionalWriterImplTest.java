@@ -1,49 +1,53 @@
 package com.jwsphere.accumulo.async.internal;
 
-import com.jwsphere.accumulo.async.*;
+import com.jwsphere.accumulo.async.AccumuloParameterResolver;
+import com.jwsphere.accumulo.async.AccumuloProvider;
+import com.jwsphere.accumulo.async.AsyncConditionalWriter;
 import com.jwsphere.accumulo.async.AsyncConditionalWriter.SingleWriteStage;
 import com.jwsphere.accumulo.async.AsyncConditionalWriter.WriteStage;
-import org.apache.accumulo.core.client.AccumuloException;
-import org.apache.accumulo.core.client.AccumuloSecurityException;
+import com.jwsphere.accumulo.async.AsyncConditionalWriterConfig;
+import com.jwsphere.accumulo.async.AsyncConnector;
+import com.jwsphere.accumulo.async.AsyncScanner;
+import com.jwsphere.accumulo.async.FailurePolicy;
+import com.jwsphere.accumulo.async.ResultException;
+import com.jwsphere.accumulo.async.Results;
 import org.apache.accumulo.core.client.ConditionalWriter.Result;
 import org.apache.accumulo.core.client.ConditionalWriter.Status;
 import org.apache.accumulo.core.client.Connector;
-import org.apache.accumulo.core.client.ZooKeeperInstance;
 import org.apache.accumulo.core.data.Condition;
 import org.apache.accumulo.core.data.ConditionalMutation;
 import org.apache.accumulo.core.data.Range;
-import org.apache.log4j.Logger;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 
-import java.util.SortedSet;
-import java.util.concurrent.*;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Function;
 
+import static com.jwsphere.accumulo.async.Results.getStatusUnchecked;
+import static com.jwsphere.accumulo.async.internal.Interruptible.failOnInterrupt;
 import static com.jwsphere.accumulo.async.internal.MoreCompletableFutures.immediatelyFailed;
 import static java.nio.charset.StandardCharsets.UTF_8;
 import static java.util.concurrent.CompletableFuture.completedFuture;
-import static org.junit.jupiter.api.Assertions.*;
+import static org.apache.accumulo.core.client.ConditionalWriter.Status.UNKNOWN;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @ExtendWith(AccumuloParameterResolver.class)
 public class AsyncConditionalWriterImplTest {
 
-    private static final Logger LOG = Logger.getLogger(AsyncConditionalWriterImplTest.class);
-
-    private static AccumuloProvider accumulo;
     private static Connector connector;
     private static AsyncConnector asyncConnector;
 
     @BeforeAll
     public static void beforeAll(AccumuloProvider accumulo) throws Exception {
-        AsyncConditionalWriterImplTest.accumulo = accumulo;
-        ZooKeeperInstance instance = new ZooKeeperInstance(
-                accumulo.getAccumuloCluster().getInstanceName(),
-                accumulo.getAccumuloCluster().getZooKeepers()
-        );
-        connector = instance.getConnector(accumulo.getAdminUser(), accumulo.getAdminToken());
+        connector = accumulo.newAdminConnector();
         asyncConnector = AsyncConnector.wrap(connector);
         connector.tableOperations().create("table");
     }
@@ -102,7 +106,7 @@ public class AsyncConditionalWriterImplTest {
     }
 
     @Test
-    public void testPutOneWithTimeLimit() throws Exception {
+    public void testPutOneWithTimeLimit() {
         assertThrows(CompletionException.class, () -> {
             AsyncConditionalWriterConfig config = AsyncConditionalWriterConfig.create();
             try (AsyncConditionalWriter writer = asyncConnector.createConditionalWriter("table", config).withRateLimit(1024)) {
@@ -231,105 +235,47 @@ public class AsyncConditionalWriterImplTest {
     @Test
     public void testRetry() throws Exception {
 
-        AsyncConditionalWriterConfig config = AsyncConditionalWriterConfig.create()
-                .withLimitedMemoryCapacity(2048);
+        AsyncConditionalWriterConfig config = AsyncConditionalWriterConfig.create();
 
         try (AsyncConditionalWriter writer = asyncConnector.createConditionalWriter("table", config)) {
 
-            byte[] payload = new byte[768];
-
             ConditionalMutation someOtherMutation = new ConditionalMutation("red_herring");
             someOtherMutation.addCondition(new Condition("cf", "cq"));
-            someOtherMutation.put("cf".getBytes(UTF_8), "cq".getBytes(UTF_8), payload);
+            someOtherMutation.put("cf", "cq", "");
 
-            ConditionalMutation cm = new ConditionalMutation("immediately_fail_exceeding_capacity");
+            ConditionalMutation cm = new ConditionalMutation("retry_row");
             cm.addCondition(new Condition("cf", "cq"));
-            cm.put("cf".getBytes(UTF_8), "cq".getBytes(UTF_8), payload);
+            cm.put("cf", "cq", "");
 
             // write a mutation, but pretend we wrote the other one, got a result of UNKNOWN,
             // and that the mutation was not actually written
             WriteStage<Result> op = writer.submit(someOtherMutation)
-                    .thenApply(x -> new Result(Status.UNKNOWN, cm, "server"))
-                    .thenComposeSubmit((result, acw) -> {
-                        switch (getStatusUnchecked(result)) {
-                            // any non-exceptional completion continues down the nominal path
-                            // the only way to short-circuit over downstream composed stages is exceptional completion
-                            // otherwise some data needs to be passed along with the completed value that each stage
-                            // uses to make a decision of whether or not to do any work
-                            case ACCEPTED:
-                                return acw.asSingleStage(completedFuture(result));
-                            case UNKNOWN:
-                                return new RetryWorkflow(acw, cm).scanAndMaybeRetry(result);
-                            default:
-                                return acw.asSingleStage(immediatelyFailed(new ResultException(result)));
-                        }
-                    });
+                    .thenApply(result -> Results.withStatus(result, UNKNOWN))
+                    .thenCompose(retryOnUnknown(cm, writer));
 
-            assertEquals(Status.ACCEPTED, op.toCompletableFuture().get().getStatus());
+            assertEquals(Status.ACCEPTED, op.toCompletableFuture().join().getStatus());
         }
     }
 
-    private static class RetryWorkflow {
-
-        private final AsyncConditionalWriter writer;
-        private final ConditionalMutation cm;
-
-        RetryWorkflow(AsyncConditionalWriter writer, ConditionalMutation cm) {
-            this.writer = writer;
-            this.cm = cm;
-        }
-
-        private CompletableFuture<SortedSet<Cell>> scan() {
-            AsyncScanner scanner = asyncConnector.createScanBuilder("table")
-                    .range(Range.exact("immediately_fail_exceeding_capacity"))
-                    .isolation(true)
-                    .build();
-            CollectingScanSubscriber collector = new CollectingScanSubscriber();
-            scanner.subscribe(collector);
-            return collector;
-        }
-
-        private SingleWriteStage scanAndMaybeRetry(Result result) {
-            return writer.asSingleStage(scan().thenCompose(maybeRetry(result)));
-        }
-
-        private Function<SortedSet<Cell>, CompletionStage<Result>> maybeRetry(Result result) {
-            return entries -> {
-                boolean wasAccepted = checkWasAccepted(entries);
-                boolean wouldBeRejected = checkWouldBeRejected(entries);
-                if (!wasAccepted && !wouldBeRejected) {
-                    try {
-                        return writer.submit(cm);
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        throw new CompletionException(e);
-                    }
-                } else if (wasAccepted) {
-                    return completedFuture(new Result(Status.ACCEPTED, result.getMutation(), result.getTabletServer()));
-                } else {
-                    return completedFuture(new Result(Status.REJECTED, result.getMutation(), result.getTabletServer()));
-                }
-            };
-        }
-
-        private boolean checkWouldBeRejected(SortedSet<Cell> entries) {
-            // maybe there was a write collision or race condition with another writer
-            return !entries.isEmpty();
-        }
-
-        private boolean checkWasAccepted(SortedSet<Cell> entries) {
-            // in reality should check for columns that determine if the mutation was accepted
-            return !entries.isEmpty();
-        }
-
-    }
-
-    private static Status getStatusUnchecked(Result result) {
-        try {
-            return result.getStatus();
-        } catch (AccumuloException | AccumuloSecurityException e) {
-            throw new CompletionException(e);
-        }
+    private Function<Result, CompletionStage<Result>> retryOnUnknown(ConditionalMutation cm, AsyncConditionalWriter writer) {
+        return (result) -> {
+            switch (getStatusUnchecked(result)) {
+                // any non-exceptional completion continues down the nominal path
+                // the only way to short-circuit over downstream composed stages is exceptional completion
+                // otherwise some data needs to be passed along with the completed value that each stage
+                // uses to make a decision of whether or not to do any work
+                case ACCEPTED:
+                    return writer.asSingleStage(completedFuture(result));
+                case UNKNOWN:
+                    AsyncScanner scanner = asyncConnector.createScanBuilder("table")
+                            .range(Range.exact("retry_row"))
+                            .isolation(true)
+                            .build();
+                    return scanner.toList().thenCompose(x -> failOnInterrupt(() -> writer.submit(cm)));
+                default:
+                    return writer.asSingleStage(immediatelyFailed(ResultException.of(result)));
+            }
+        };
     }
 
 }

@@ -4,6 +4,10 @@ import org.apache.accumulo.core.client.ConditionalWriter.Status;
 
 import java.util.function.Predicate;
 
+/**
+ * Defines a policy that can determine whether a particular conditional
+ * mutation status is considered normal completion or a failure.
+ */
 public final class FailurePolicy implements Predicate<Status> {
 
     private final boolean failOnRejected;

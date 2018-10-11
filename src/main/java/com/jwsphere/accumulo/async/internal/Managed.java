@@ -69,7 +69,7 @@ public class Managed {
 
     }
 
-    private static class ManagedRunnable extends ForkJoinTask<Void> implements Runnable {
+    private static final class ManagedRunnable extends ForkJoinTask<Void> implements Runnable {
 
         private final Runnable runnable;
 
@@ -117,7 +117,7 @@ public class Managed {
         }
 
         @Override
-        public boolean block() throws InterruptedException {
+        public boolean block() {
             result = supplier.get();
             return true;
         }
@@ -148,7 +148,7 @@ public class Managed {
         }
 
         @Override
-        public boolean block() throws InterruptedException {
+        public boolean block() {
             runnable.run();
             done = true;
             return true;

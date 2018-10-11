@@ -6,10 +6,13 @@ import com.jwsphere.accumulo.async.AsyncMultiTableBatchWriter;
 import com.jwsphere.accumulo.async.AsyncMultiTableBatchWriterConfig;
 import com.jwsphere.accumulo.async.SubmissionTimeoutException;
 import com.jwsphere.accumulo.async.internal.Interruptible.InterruptibleFunction;
-import io.micrometer.core.instrument.MeterRegistry;
-import io.micrometer.core.instrument.Timer;
-import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
-import org.apache.accumulo.core.client.*;
+import org.apache.accumulo.core.client.AccumuloException;
+import org.apache.accumulo.core.client.AccumuloSecurityException;
+import org.apache.accumulo.core.client.BatchWriter;
+import org.apache.accumulo.core.client.BatchWriterConfig;
+import org.apache.accumulo.core.client.MultiTableBatchWriter;
+import org.apache.accumulo.core.client.MutationsRejectedException;
+import org.apache.accumulo.core.client.TableNotFoundException;
 import org.apache.accumulo.core.data.Mutation;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -17,7 +20,18 @@ import org.slf4j.LoggerFactory;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.concurrent.*;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionException;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Executor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -67,17 +81,13 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
      *                      be requested to ensure the failure did not affect its internal state.
      */
     public AsyncMultiTableBatchWriterImpl(WriterFactory writerFactory) {
-        this(writerFactory, AsyncMultiTableBatchWriterConfig.create(new BatchWriterConfig()), new SimpleMeterRegistry());
+        this(writerFactory, AsyncMultiTableBatchWriterConfig.create(new BatchWriterConfig()));
     }
 
     public AsyncMultiTableBatchWriterImpl(WriterFactory writerFactory, AsyncMultiTableBatchWriterConfig config) {
-        this(writerFactory, config, new SimpleMeterRegistry());
-    }
-
-    public AsyncMultiTableBatchWriterImpl(WriterFactory writerFactory, AsyncMultiTableBatchWriterConfig config, MeterRegistry registry) {
         this.writerFactory = writerFactory;
         this.writer = writerFactory.create();
-        this.flushTask = new FlushTask(registry, config.getMaxBytesPerFlush(), config.getMaxFlushRatePerSecond());
+        this.flushTask = new FlushTask(config.getMaxBytesPerFlush(), config.getMaxFlushRatePerSecond());
         this.executorService.submit(flushTask);
     }
 
@@ -137,11 +147,7 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
     @Override
     public AsyncBatchWriter getBatchWriter(String table) {
-        try {
-            return new AsyncBatchWriterImpl(table);
-        } catch (AccumuloException | AccumuloSecurityException | TableNotFoundException e) {
-            throw new RuntimeException(e);
-        }
+        return new AsyncBatchWriterImpl(table);
     }
 
     @Override
@@ -202,10 +208,8 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
         private final WriterStrategy strategy;
         private final CompletionBarrier barrier;
 
-        AsyncBatchWriterImpl(String table) throws AccumuloException, AccumuloSecurityException, TableNotFoundException {
-            MultiTableBatchWriter writer = AsyncMultiTableBatchWriterImpl.this.writer;
-            BatchWriter bw = writer.getBatchWriter(table);
-            this.strategy = new SingleTableWriterStrategy(writer, bw, table);
+        AsyncBatchWriterImpl(String table) {
+            this.strategy = new SingleTableWriterStrategy(table);
             this.barrier = new CompletionBarrier();
         }
 
@@ -236,11 +240,6 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
             return propagateCompletionThenTrack(flushTask.trySubmit(createMutation(mutation)));
         }
 
-        private FutureSingleMutation createMutation(Mutation mutation) {
-            AsyncMultiTableBatchWriterImpl writer = AsyncMultiTableBatchWriterImpl.this;
-            return new FutureSingleMutation(writer, strategy, mutation, capacityLimit);
-        }
-
         @Override
         public WriteStage submitMany(Collection<Mutation> mutations) throws InterruptedException {
             return propagateCompletionThenTrack(flushTask.submit(createMutation(mutations)));
@@ -268,10 +267,20 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
             return propagateCompletionThenTrack(flushTask.trySubmit(createMutation(mutations)));
         }
 
+        @Override
+        public WriteStage asWriteStage(CompletionStage<Void> stage) {
+            return asWriteFuture(stage);
+        }
+
         private TableWriteFuture asWriteFuture(CompletionStage<Void> stage) {
             CompletableTableWriteFuture future = new CompletableTableWriteFuture(this);
             stage.whenComplete(propagateResultTo(future));
             return future;
+        }
+
+        private FutureSingleMutation createMutation(Mutation mutation) {
+            AsyncMultiTableBatchWriterImpl writer = AsyncMultiTableBatchWriterImpl.this;
+            return new FutureSingleMutation(writer, strategy, mutation, capacityLimit);
         }
 
         private FutureMutationBatch createMutation(Collection<Mutation> mutations) {
@@ -369,7 +378,7 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
         }
 
         boolean tryAcquire() {
-            return true;
+            return capacityLimit.tryAcquire(permits);
         }
 
         @Override
@@ -400,6 +409,12 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
     }
 
+    /*
+     * If the table name is known up front as with an AsyncBatchWriter the writer
+     * can be cached as long as the multi-table writer is not invalidated.  Since
+     * all flushes are performed sequentially on a single thread, synchronization
+     * is unnecessary.
+     */
     private static final class SingleTableWriterStrategy implements WriterStrategy {
 
         private final String table;
@@ -407,14 +422,12 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
         private MultiTableBatchWriter multiTableBatchWriter;
         private BatchWriter writer;
 
-        public SingleTableWriterStrategy(MultiTableBatchWriter multiTableBatchWriter, BatchWriter writer, String table) {
-            this.multiTableBatchWriter = multiTableBatchWriter;
-            this.writer = writer;
+        public SingleTableWriterStrategy(String table) {
             this.table = table;
         }
 
         public BatchWriter getWriter(MultiTableBatchWriter writer) throws AccumuloException, AccumuloSecurityException, TableNotFoundException {
-            if (this.multiTableBatchWriter != writer) {
+            if (this.writer == null || this.multiTableBatchWriter != writer) {
                 this.multiTableBatchWriter = writer;
                 this.writer = multiTableBatchWriter.getBatchWriter(table);
             }
@@ -423,18 +436,8 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
     }
 
-    private static final class MultiTableWriterStrategy implements WriterStrategy {
-
-        private final String table;
-
-        public MultiTableWriterStrategy(String table) {
-            this.table = table;
-        }
-
-        public BatchWriter getWriter(MultiTableBatchWriter writer) throws AccumuloException, AccumuloSecurityException, TableNotFoundException {
-            return writer.getBatchWriter(table);
-        }
-
+    private static WriterStrategy multiTableWriterStrategy(String table) {
+        return writer -> writer.getBatchWriter(table);
     }
 
     private static final class FutureSingleMutation extends CapacityLimitedFutureMutation {
@@ -443,7 +446,7 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
         private final Mutation mutation;
 
         FutureSingleMutation(AsyncMultiTableBatchWriterImpl writer, String table, Mutation mutation, LongSemaphore capacityLimit) {
-            this(writer, new MultiTableWriterStrategy(table), mutation, capacityLimit);
+            this(writer, multiTableWriterStrategy(table), mutation, capacityLimit);
         }
 
         FutureSingleMutation(AsyncMultiTableBatchWriterImpl writer, WriterStrategy strategy, Mutation mutation, LongSemaphore capacityLimit) {
@@ -456,7 +459,7 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
         public void submit(MultiTableBatchWriter writer) {
             try {
                 strategy.getWriter(writer).addMutation(mutation);
-            } catch (Throwable e) {
+            } catch (AccumuloException | AccumuloSecurityException | TableNotFoundException | RuntimeException e) {
                 completeExceptionally(e);
             }
         }
@@ -469,7 +472,7 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
         private final Collection<Mutation> mutations;
 
         FutureMutationBatch(AsyncMultiTableBatchWriterImpl writer, String table, Collection<Mutation> mutations, LongSemaphore capacityLimit) {
-            this(writer, new MultiTableWriterStrategy(table), mutations, capacityLimit);
+            this(writer, multiTableWriterStrategy(table), mutations, capacityLimit);
         }
 
         FutureMutationBatch(AsyncMultiTableBatchWriterImpl writer, WriterStrategy strategy, Collection<Mutation> mutations, LongSemaphore capacityLimit) {
@@ -479,10 +482,10 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
         }
 
         @Override
-        public void submit(MultiTableBatchWriter writer) throws MutationsRejectedException {
+        public void submit(MultiTableBatchWriter writer) {
             try {
                 strategy.getWriter(writer).addMutations(mutations);
-            } catch (AccumuloException | AccumuloSecurityException | TableNotFoundException e) {
+            } catch (AccumuloException | AccumuloSecurityException | TableNotFoundException | RuntimeException e) {
                 completeExceptionally(e);
             }
         }
@@ -509,11 +512,11 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
         }
 
         @Override
-        void acquire() throws InterruptedException {
+        void acquire() {
         }
 
         @Override
-        boolean acquire(long timeout, TimeUnit unit) throws InterruptedException {
+        boolean acquire(long timeout, TimeUnit unit) {
             return true;
         }
 
@@ -548,74 +551,51 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
         private volatile boolean shutdown = false;
 
-        private final AtomicLong submitted = new AtomicLong();
-        private final AtomicLong flushed = new AtomicLong();
-        private final AtomicLong failed = new AtomicLong();
-        private final AtomicLong flushes = new AtomicLong();
-        private final AtomicLong batchBytes;
+        private WriterListener metrics;
 
-
-        private final Timer flushLatency;
-        private final Timer waitTime;
-        private final Timer submitTime;
-        private final Timer overallWriteLatency;
-
-        FlushTask(MeterRegistry registry, long batchCapacity, double flushesPerSecondLimit) {
+        FlushTask(long batchCapacity, double flushesPerSecondLimit) {
             this.batchCapacityInBytes = batchCapacity;
             this.queue = new LinkedBlockingQueue<>();
-            this.batchBytes = new AtomicLong();
             this.batch = new ArrayList<>();
             this.limiter = RateLimiter.create(flushesPerSecondLimit);
-
-            BatchWriterMetricFactory metrics = new BatchWriterMetricFactory(id);
-            metrics.registerQueueDepthMetric(registry, queue);
-            metrics.registerBatchBytesMetric(registry, batchBytes);
-            metrics.registerFlushOperationsMetric(registry, flushes);
-            metrics.registerFlushedMutationsMetric(registry, flushed);
-            metrics.registerSubmittedMutationsMetric(registry, submitted);
-            metrics.registerFailedMutationsMetric(registry, failed);
-            flushLatency = metrics.registerFlushLatencyMetric(registry);
-            waitTime = metrics.registerWaitLatencyMetric(registry);
-            submitTime = metrics.registerSubmitLatencyMetric(registry);
-            overallWriteLatency = metrics.registerOverallLatencyMetric(registry);
+            this.metrics = new WriterListener() {};
         }
 
         FutureMutation submit(FutureMutation mutation) throws InterruptedException {
             ensureNotShutdown();
             mutation.acquire();
-            boolean added = queue.offer(mutation);
-            if (!added) {
-                mutation.completeExceptionally(new RuntimeException());
-            }
-            submitted.incrementAndGet();
-            return mutation;
+            return addToQueue(mutation);
         }
 
         FutureMutation submit(FutureMutation mutation, long timeout, TimeUnit unit) throws InterruptedException {
             ensureNotShutdown();
             boolean acquired = mutation.acquire(timeout, unit);
-            if (!acquired) {
-                mutation.completeExceptionally(SUBMISSION_TIMEOUT);
+            if (acquired) {
+                return addToQueue(mutation);
             }
-            boolean added = queue.offer(mutation);
-            if (!added) {
-                mutation.completeExceptionally(new RuntimeException());
-            }
-            submitted.incrementAndGet();
+            mutation.completeExceptionally(SUBMISSION_TIMEOUT);
             return mutation;
         }
 
         FutureMutation trySubmit(FutureMutation mutation) {
             ensureNotShutdown();
             boolean acquired = mutation.tryAcquire();
-            if (!acquired) {
-                mutation.completeExceptionally(SUBMISSION_TIMEOUT);
+            if (acquired) {
+                return addToQueue(mutation);
             }
-            boolean added = queue.offer(mutation);
-            if (!added) {
+            mutation.completeExceptionally(SUBMISSION_TIMEOUT);
+            return mutation;
+        }
+
+        private FutureMutation addToQueue(FutureMutation mutation) {
+            boolean submitted = queue.offer(mutation);
+            if (!submitted) {
+                // submission to an unbounded queue should not fail
                 mutation.completeExceptionally(new RuntimeException());
+                return mutation;
             }
-            submitted.incrementAndGet();
+            metrics.recordWaitTime(id, mutation.msSinceSubmissionRequest(), TimeUnit.MILLISECONDS);
+            metrics.recordSubmission(id);
             return mutation;
         }
 
@@ -637,26 +617,26 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
                         return;
                     }
                     try {
-                        LOG.debug("Submitting {} mutations -- {} queued", batch.size(), queue.size());
-                        long batchBytes = 0;
-                        for (FutureMutation mutation : batch) {
-                            long start = System.nanoTime();
-                            batchBytes += mutation.size();
-                            mutation.submit(writer);
-                            long end = System.nanoTime();
-                            long elapsed = end - start;
-                            submitTime.record(elapsed, TimeUnit.NANOSECONDS);
+                        FlushEvent event = metrics.startFlushEvent();
+                        event.recordBatchSize(batch.size());
+                        event.recordRemainingQueueDepth(queue.size());
+
+                        long batchBytes = submitCurrentBatch();
+                        event.recordBatchEstimatedMemory(batchBytes);
+
+                        // control the rate of RPCs to avoid many small requests
+                        event.beforeRateLimiting();
+                        limiter.acquire();
+                        event.afterRateLimiting();
+
+                        for (FutureMutation fm : batch) {
+                            metrics.recordWaitTime(id, fm.msSinceSubmissionRequest(), TimeUnit.MILLISECONDS);
                         }
 
-                        this.batchBytes.set(batchBytes);
-                        limiter.acquire();
-                        LOG.debug("Flushing {} mutations", batch.size());
-                        long start = System.nanoTime();
+                        event.beforeFlush();
                         writer.flush();
-                        long end = System.nanoTime();
-                        long elapsed = end - start;
-                        flushLatency.record(elapsed, TimeUnit.NANOSECONDS);
-                        flushes.incrementAndGet();
+                        event.afterFlush();
+
                         completeAll(batch);
                     } catch (MutationsRejectedException e) {
                         failAll(batch, e);
@@ -670,6 +650,9 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
                     } catch (RuntimeException e) {
                         handleRuntimeException(batch, e);
                     } finally {
+                        for (FutureMutation fm : batch) {
+                            metrics.recordWriteLatency(id, fm.msSinceSubmissionRequest(), TimeUnit.MILLISECONDS);
+                        }
                         batch.clear();
                     }
                 }
@@ -684,9 +667,7 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
         private void nextBatch() throws InterruptedException {
             long batchSize = 0;
-            batchBytes.set(0);
             FutureMutation first = queue.take();
-            waitTime.record(first.msSinceSubmissionRequest(), TimeUnit.MILLISECONDS);
             batchSize += first.size();
             batch.add(first);
 
@@ -694,12 +675,20 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
             while ((fm = queue.peek()) != null) {
                 if (batchSize + fm.size() < batchCapacityInBytes) {
                     batchSize += fm.size();
-                    waitTime.record(fm.msSinceSubmissionRequest(), TimeUnit.MILLISECONDS);
                     batch.add(queue.poll());
                 } else {
                     break;
                 }
             }
+        }
+
+        private long submitCurrentBatch() throws MutationsRejectedException {
+            long batchBytes = 0;
+            for (FutureMutation mutation : batch) {
+                batchBytes += mutation.size();
+                mutation.submit(writer);
+            }
+            return batchBytes;
         }
 
         private void handleRuntimeException(List<FutureMutation> batch, RuntimeException e) {
@@ -720,16 +709,12 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
         private void completeAll(List<FutureMutation> batch) {
             for (FutureMutation mutation : batch) {
                 mutation.internalComplete();
-                flushed.incrementAndGet();
-                overallWriteLatency.record(mutation.msSinceSubmissionRequest(), TimeUnit.MILLISECONDS);
             }
         }
 
         private void failAll(List<FutureMutation> batch, Throwable cause) {
             for (FutureMutation mutation : batch) {
                 mutation.internalCompleteExceptionally(cause);
-                failed.incrementAndGet();
-                overallWriteLatency.record(mutation.msSinceSubmissionRequest(), TimeUnit.MILLISECONDS);
             }
         }
 
