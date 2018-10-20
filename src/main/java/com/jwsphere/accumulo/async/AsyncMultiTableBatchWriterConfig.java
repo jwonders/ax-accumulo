@@ -1,6 +1,9 @@
 package com.jwsphere.accumulo.async;
 
+import com.jwsphere.accumulo.async.internal.NoOpWriteListener;
 import org.apache.accumulo.core.client.BatchWriterConfig;
+
+import java.util.Objects;
 
 public class AsyncMultiTableBatchWriterConfig {
 
@@ -10,17 +13,23 @@ public class AsyncMultiTableBatchWriterConfig {
 
     private final double maxFlushRatePerSecond;
 
-    private AsyncMultiTableBatchWriterConfig(BatchWriterConfig config, long maxBytesPerFlush, double maxFlushRatePerSecond) {
-        this.config = config;
+    private final AsyncMultiTableBatchWriter.ListenerFactory listenerFactory;
+
+    private AsyncMultiTableBatchWriterConfig(BatchWriterConfig config,
+                                             long maxBytesPerFlush,
+                                             double maxFlushRatePerSecond,
+                                             AsyncMultiTableBatchWriter.ListenerFactory listenerFactory) {
+        this.config = Objects.requireNonNull(config);
         this.maxBytesPerFlush = maxBytesPerFlush;
         this.maxFlushRatePerSecond = maxFlushRatePerSecond;
+        this.listenerFactory = Objects.requireNonNull(listenerFactory);
     }
 
     public AsyncMultiTableBatchWriterConfig withMaxBytesPerFlush(long maxBytesPerFlush) {
         if (maxBytesPerFlush <= 0) {
             throw new IllegalArgumentException("Limit on incomplete mutation size must be strictly positive.");
         }
-        return new AsyncMultiTableBatchWriterConfig(config, maxBytesPerFlush, maxFlushRatePerSecond);
+        return new AsyncMultiTableBatchWriterConfig(config, maxBytesPerFlush, maxFlushRatePerSecond, listenerFactory);
     }
 
 
@@ -28,7 +37,12 @@ public class AsyncMultiTableBatchWriterConfig {
         if (maxFlushRatePerSecond <= 0) {
             throw new IllegalArgumentException("Limit on flush rate must be strictly positive.");
         }
-        return new AsyncMultiTableBatchWriterConfig(config, maxBytesPerFlush, maxFlushRatePerSecond);
+        return new AsyncMultiTableBatchWriterConfig(config, maxBytesPerFlush, maxFlushRatePerSecond, listenerFactory);
+    }
+
+    public AsyncMultiTableBatchWriterConfig withListener(AsyncMultiTableBatchWriter.ListenerFactory listenerFactory) {
+        Objects.requireNonNull(listenerFactory);
+        return new AsyncMultiTableBatchWriterConfig(config, maxBytesPerFlush, maxFlushRatePerSecond, listenerFactory);
     }
 
     public BatchWriterConfig getBatchWriterConfig() {
@@ -43,8 +57,12 @@ public class AsyncMultiTableBatchWriterConfig {
         return maxFlushRatePerSecond;
     }
 
+    public AsyncMultiTableBatchWriter.ListenerFactory getListenerFactory() {
+        return listenerFactory;
+    }
+
     public static AsyncMultiTableBatchWriterConfig create(BatchWriterConfig config) {
-        return new AsyncMultiTableBatchWriterConfig(config, config.getMaxMemory(), 50);
+        return new AsyncMultiTableBatchWriterConfig(config, config.getMaxMemory(), 50, NoOpWriteListener.getInstance());
     }
 
 }

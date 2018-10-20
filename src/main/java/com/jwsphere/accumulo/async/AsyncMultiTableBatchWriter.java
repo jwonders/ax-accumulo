@@ -160,4 +160,66 @@ public interface AsyncMultiTableBatchWriter extends AutoCloseable, Awaitable {
 
     }
 
+    interface Listener {
+
+        FlushEvent startFlushEvent();
+
+        default void recordSubmission(long writerId) {
+        }
+
+        default void recordWaitTime(long writerId, long duration, TimeUnit unit) {
+        }
+
+        default void recordSubmitTime(long writerId, long duration, TimeUnit unit) {
+        }
+
+        default void recordFlushLatency(long writerId, long duration, TimeUnit unit) {
+        }
+
+        default void recordWriteLatency(long writerId, long duration, TimeUnit unit) {
+        }
+
+        default void recordSubmissionTimedOut(long writerId) {
+        }
+
+        default void recordFlush(long writerId) {
+        }
+
+    }
+
+    interface FlushEvent extends AutoCloseable {
+
+        default void recordBatchEstimatedMemory(long numBytes) {
+        }
+
+        default void recordBatchSize(int numMutations) {
+        }
+
+        default void recordRemainingQueueDepth(int size) {
+        }
+
+        default void beforeRateLimiting() {
+        }
+
+        default void afterRateLimiting() {
+        }
+
+        default void beforeFlush() {
+        }
+
+        default void afterFlush() {
+        }
+
+        default void close() {
+        }
+
+    }
+
+    interface ListenerFactory {
+
+        Listener create(long writerId);
+
+    }
+
+
 }

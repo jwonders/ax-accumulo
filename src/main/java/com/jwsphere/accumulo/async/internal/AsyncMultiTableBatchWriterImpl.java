@@ -72,6 +72,7 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
     private final ExecutorService executorService = Executors.newSingleThreadExecutor();
     private final FlushTask flushTask;
     private final LongSemaphore capacityLimit = new LongSemaphore(50 * 1024 * 1024);
+    private final AsyncMultiTableBatchWriter.ListenerFactory listenerFactory;
 
     /**
      * Creates an async multi table batch writer.  Ownership of the writer
@@ -87,6 +88,7 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
     public AsyncMultiTableBatchWriterImpl(WriterFactory writerFactory, AsyncMultiTableBatchWriterConfig config) {
         this.writerFactory = writerFactory;
         this.writer = writerFactory.create();
+        this.listenerFactory = config.getListenerFactory();
         this.flushTask = new FlushTask(config.getMaxBytesPerFlush(), config.getMaxFlushRatePerSecond());
         this.executorService.submit(flushTask);
     }
@@ -551,14 +553,14 @@ public class AsyncMultiTableBatchWriterImpl implements AsyncMultiTableBatchWrite
 
         private volatile boolean shutdown = false;
 
-        private WriterListener metrics;
+        private AsyncMultiTableBatchWriter.Listener metrics;
 
         FlushTask(long batchCapacity, double flushesPerSecondLimit) {
             this.batchCapacityInBytes = batchCapacity;
             this.queue = new LinkedBlockingQueue<>();
             this.batch = new ArrayList<>();
             this.limiter = RateLimiter.create(flushesPerSecondLimit);
-            this.metrics = new WriterListener() {};
+            this.metrics = listenerFactory.create(id);
         }
 
         FutureMutation submit(FutureMutation mutation) throws InterruptedException {

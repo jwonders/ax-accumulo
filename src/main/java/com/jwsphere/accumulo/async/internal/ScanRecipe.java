@@ -21,6 +21,14 @@ public interface ScanRecipe {
 
     boolean isIsolated();
 
+    int getBatchSize();
+
+    long getReadaheadThreshold();
+
+    long getBatchTimeout();
+
+    long getTimeout();
+
     String getClassLoaderContext();
 
     SamplerConfiguration getSamplerConfiguration();

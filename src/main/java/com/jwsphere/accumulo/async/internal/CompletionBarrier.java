@@ -11,7 +11,6 @@ import java.util.concurrent.CompletionStage;
 import java.util.concurrent.Executor;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
-import java.util.function.BiFunction;
 
 /**
  * Tracks groups of asynchronous operations, allowing callers to wait until
@@ -38,12 +37,6 @@ import java.util.function.BiFunction;
  * @author Jonathan Wonders
  */
 public class CompletionBarrier implements Awaitable {
-
-    private static final BiFunction<Long, Long, Long> GENERATION_INCOMPLETE_INCREMENTER =
-            (generation, incomplete) -> incomplete == null ? 1 : incomplete + 1;
-
-    private static final BiFunction<Long, Long, Long> GENERATION_INCOMPLETE_DECREMENTER =
-            (generation, incomplete) -> incomplete - 1;
 
     /**
      * The current generation.
@@ -78,7 +71,7 @@ public class CompletionBarrier implements Awaitable {
                 return future;
             }
         }
-        numIncompleteByGeneration.compute(generation, GENERATION_INCOMPLETE_INCREMENTER);
+        numIncompleteByGeneration.compute(generation, CompletionBarrier::increment);
         return stage.whenComplete(currentGeneration);
     }
 
@@ -98,7 +91,7 @@ public class CompletionBarrier implements Awaitable {
                 return future;
             }
         }
-        numIncompleteByGeneration.compute(generation, GENERATION_INCOMPLETE_INCREMENTER);
+        numIncompleteByGeneration.compute(generation, CompletionBarrier::increment);
         return stage.whenCompleteAsync(currentGeneration);
     }
 
@@ -118,7 +111,7 @@ public class CompletionBarrier implements Awaitable {
                 return future;
             }
         }
-        numIncompleteByGeneration.compute(generation, GENERATION_INCOMPLETE_INCREMENTER);
+        numIncompleteByGeneration.compute(generation, CompletionBarrier::increment);
         return stage.whenCompleteAsync(currentGeneration, executor);
     }
 
@@ -194,7 +187,7 @@ public class CompletionBarrier implements Awaitable {
      * Completes one operation for the given generation.
      */
     private synchronized void complete(long generation) {
-        long incomplete = numIncompleteByGeneration.compute(generation, GENERATION_INCOMPLETE_DECREMENTER);
+        long incomplete = numIncompleteByGeneration.compute(generation, CompletionBarrier::decrement);
         if (incomplete == 0) {
             numIncompleteByGeneration.remove(generation);
             this.notifyAll();
@@ -214,6 +207,14 @@ public class CompletionBarrier implements Awaitable {
             complete(generation);
         }
 
+    }
+
+    private static Long increment(Long generation, Long incomplete) {
+        return incomplete == null ? 1 : incomplete + 1;
+    }
+
+    private static Long decrement(Long generation, Long incomplete) {
+        return incomplete - 1;
     }
 
 }

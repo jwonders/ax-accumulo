@@ -10,6 +10,7 @@ import org.apache.accumulo.core.security.Authorizations;
 
 import java.util.Objects;
 import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
 
 public class ScanBuilderImpl implements ScanBuilder {
 
@@ -61,6 +62,30 @@ public class ScanBuilderImpl implements ScanBuilder {
     public ScanBuilder authorizations(Authorizations auth) {
         recipe.setAuthorizations(auth);
         return this;
+    }
+
+    @Override
+    public ScanBuilder batchSize(int size) {
+        recipe.setBatchSize(size);
+        return this;
+    }
+
+    @Override
+    public ScanBuilder batchTimeout(long timeout, TimeUnit unit) {
+        recipe.setBatchTimeout(timeout, unit);
+        return null;
+    }
+
+    @Override
+    public ScanBuilder readaheadThreshold(long batches) {
+        recipe.setReadaheadThreshold(batches);
+        return null;
+    }
+
+    @Override
+    public ScanBuilder timeout(long timeout, TimeUnit unit) {
+        recipe.setTimeout(timeout, unit);
+        return null;
     }
 
     @Override

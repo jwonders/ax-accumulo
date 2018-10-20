@@ -11,6 +11,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.SortedSet;
 import java.util.TreeSet;
+import java.util.concurrent.TimeUnit;
 
 public class MutableScanRecipe implements ScanRecipe {
 
@@ -18,6 +19,10 @@ public class MutableScanRecipe implements ScanRecipe {
     private SortedSet<Column> fetchedColumns = new TreeSet<>();
     private Authorizations auth = Authorizations.EMPTY;
     private boolean isolated = false;
+    private int batchSize = 100;
+    private long batchTimeout = Long.MAX_VALUE;
+    private long readaheadThreshold = 1;
+    private long timeout = Long.MAX_VALUE;
 
     private String classLoaderContext = null;
     private Map<String, IteratorSetting> iteratorSettingsByName = new HashMap<>();
@@ -45,6 +50,22 @@ public class MutableScanRecipe implements ScanRecipe {
 
     public void addIterator(IteratorSetting iteratorSetting) {
         this.iteratorSettingsByName.put(iteratorSetting.getName(), iteratorSetting);
+    }
+
+    public void setBatchSize(int batchSize) {
+        this.batchSize = batchSize;
+    }
+
+    public void setReadaheadThreshold(long readaheadThreshold) {
+        this.readaheadThreshold = readaheadThreshold;
+    }
+
+    public void setBatchTimeout(long batchTimeout, TimeUnit unit) {
+        this.batchTimeout = unit.toMillis(batchTimeout);
+    }
+
+    public void setTimeout(long timeout, TimeUnit unit) {
+        this.timeout = unit.toMillis(timeout);
     }
 
     public void setSamplerConfiguration(SamplerConfiguration samplerConfig) {
@@ -78,6 +99,26 @@ public class MutableScanRecipe implements ScanRecipe {
     @Override
     public boolean isIsolated() {
         return isolated;
+    }
+
+    @Override
+    public int getBatchSize() {
+        return batchSize;
+    }
+
+    @Override
+    public long getReadaheadThreshold() {
+        return readaheadThreshold;
+    }
+
+    @Override
+    public long getBatchTimeout() {
+        return batchTimeout;
+    }
+
+    @Override
+    public long getTimeout() {
+        return timeout;
     }
 
     @Override
